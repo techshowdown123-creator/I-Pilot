@@ -1,5 +1,6 @@
 import type { FaceFrame, GazeSample } from '../types';
 import { GazeModel } from '../gaze/regression';
+import { FEATURE_COUNT } from '../gaze/features';
 import { nowMs } from '../time';
 import { screenMapper } from './screen';
 
@@ -58,7 +59,7 @@ export class CameraGazeSource implements GazeProvider {
 
   learn(target: { x: number; y: number }, from: number, to: number, opts: { closedThreshold: number; maxErrorPx: number }): boolean {
     const m = this.model;
-    if (!m || !m.canLearn) return false;
+    if (!m || !m.canLearn || !this.calibrated) return false;
     const frames = this.history.filter((f) => f.t >= from && f.t <= to && f.faceDetected && f.features.length && (f.blinkLeft + f.blinkRight) / 2 < opts.closedThreshold);
     if (frames.length < 3) return false;
     // Reject if the model was far off: the selection was probably not where the user looked.
@@ -86,7 +87,8 @@ export class CameraGazeSource implements GazeProvider {
   }
 
   get calibrated(): boolean {
-    return !!this.model;
+    // A model from an older feature set can't be used: recalibration needed.
+    return !!this.model && this.model.dims === FEATURE_COUNT;
   }
 
   get running(): boolean {
@@ -103,11 +105,11 @@ export class CameraGazeSource implements GazeProvider {
         this.history.push(f);
         while (this.history.length && f.t - this.history[0].t > 3000) this.history.shift();
         const blink = (f.blinkLeft + f.blinkRight) / 2;
-        if (!f.faceDetected || !this.model) {
+        if (!f.faceDetected || !this.calibrated) {
           this.em.emit({ t: f.t, x: NaN, y: NaN, faceDetected: f.faceDetected, blink });
           return;
         }
-        const p = this.model.predict(f.features);
+        const p = this.model!.predict(f.features);
         this.em.emit({ t: f.t, x: p.x, y: p.y, faceDetected: true, blink });
       });
     }

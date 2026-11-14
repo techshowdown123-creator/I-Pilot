@@ -125,6 +125,28 @@ test('with very noisy webcam-like gaze, looking back after looking away still re
   }
 });
 
+test('the lock follows small steps to the adjacent option (up/down and left/right) with noisy gaze', async ({ page }) => {
+  // Like a calibrated noisy webcam: wide fixation radius, σ 60 px, 25 px sample noise.
+  await page.addInitScript(() => {
+    localStorage.setItem('ipilot.sim', JSON.stringify({ noisePx: 25, driftPx: 0 }));
+    localStorage.setItem('ipilot.settings', JSON.stringify({ fixationDispersionPx: 180, gazeSigmaPx: 60 }));
+  });
+  await start(page, '/demo/dense');
+  const locked = () => page.evaluate(() => (window as unknown as { __ipilot: { sm: { target: { label: string } | null } } }).__ipilot.sm.target?.label ?? null);
+  const key = (k: string) => page.getByRole('button', { name: k, exact: true });
+  await lookAtEl(page, key('2'));
+  await expect.poll(locked, { timeout: 2000 }).toBe('2');
+  for (const k of ['5', '8', '9', '6']) {
+    // 64 px steps: smaller than the fixation radius, so no new I-DT landing.
+    await lookAtEl(page, key(k), 0, 0, 100);
+    await expect.poll(locked, { timeout: 2000 }).toBe(k);
+  }
+  // A slow blink right after a step selects the new key, not the old one.
+  await page.waitForTimeout(300);
+  await blink(page);
+  await expect(page.getByTestId('dense-last')).toHaveText('Pressed: Key 6 (×1)');
+});
+
 test('losing the face pauses, and it resumes once the face is back', async ({ page }) => {
   await start(page, '/demo/dense');
   await lookAtEl(page, page.getByRole('button', { name: '5', exact: true }));

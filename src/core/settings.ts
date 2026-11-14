@@ -44,7 +44,7 @@ export const DEFAULT_SETTINGS: PilotSettings = {
   snapping: true,
   selection: 'blink',
   clickAction: 'click',
-  filterMinCutoff: 0.6,
+  filterMinCutoff: 1.0,
   filterBeta: 0.003,
   fixationMinMs: 200,
   fixationDispersionPx: 90,
@@ -54,13 +54,28 @@ export const DEFAULT_SETTINGS: PilotSettings = {
   dwellMs: 1000,
   gazeSigmaPx: 60,
   ambiguityRatio: 0.7,
-  hysteresis: 1.4,
+  hysteresis: 1.25,
   confirmDangerous: true,
   learnFromSelections: true,
   showGazeDot: false,
   viewingDistanceCm: 60,
   pxPerCm: 96 / 2.54,
 };
+
+/**
+ * Bump when tuning defaults change. Saved settings older than this get the
+ * new values for TUNED_KEYS, while calibrated values (sigma, blink threshold,
+ * fixation radius) and user choices are kept.
+ */
+export const SETTINGS_VERSION = 2;
+export const TUNED_KEYS: (keyof PilotSettings)[] = ['filterMinCutoff', 'filterBeta', 'hysteresis'];
+
+export function migrateSettings(saved: Partial<PilotSettings>, savedVersion: number): Partial<PilotSettings> {
+  if (savedVersion >= SETTINGS_VERSION) return saved;
+  const out = { ...saved };
+  for (const k of TUNED_KEYS) delete out[k];
+  return out;
+}
 
 export type Condition = 'A' | 'B' | 'C';
 

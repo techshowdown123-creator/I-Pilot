@@ -3,6 +3,8 @@ import {
   CameraGazeSource,
   CONDITIONS,
   DEFAULT_SETTINGS,
+  SETTINGS_VERSION,
+  migrateSettings,
   GazeModel,
   MouseGazeSource,
   PilotEngine,
@@ -15,6 +17,7 @@ import {
   type PilotState,
 } from '@core/index';
 import { MediaPipeFrameSource } from '@core/input/mediapipe';
+import { FEATURE_COUNT } from '@core/gaze/features';
 import { load, save } from '../lib/storage';
 
 export type SourceKind = 'none' | 'mouse' | 'camera';
@@ -68,7 +71,7 @@ function reducer(s: State, a: Action): State {
   }
 }
 
-const K = { settings: 'ipilot.settings', model: 'ipilot.model', calib: 'ipilot.calibration', sim: 'ipilot.sim' };
+const K = { settingsVersion: 'ipilot.settingsVersion', settings: 'ipilot.settings', model: 'ipilot.model', calib: 'ipilot.calibration', sim: 'ipilot.sim' };
 
 interface Ctx extends State {
   engine: PilotEngine | null;
@@ -93,9 +96,18 @@ export function usePilot(): Ctx {
 
 const base = import.meta.env.BASE_URL;
 
+/** A calibration made with an older gaze feature set can't be used; forget it so the UI asks for a new one. */
+function dropIncompatibleCalibration(): void {
+  const m = load<GazeModelJSON | null>(K.model, null);
+  if (m && m.mean.length !== FEATURE_COUNT) {
+    save(K.model, null);
+    save(K.calib, null);
+  }
+}
+
 export function PilotProvider({ children }: { children: ReactNode }) {
-  const [state, dispatch] = useReducer(reducer, undefined, () => ({
-    settings: { ...DEFAULT_SETTINGS, ...load<Partial<PilotSettings>>(K.settings, {}) },
+  const [state, dispatch] = useReducer(reducer, undefined, () => (dropIncompatibleCalibration(), {
+    settings: { ...DEFAULT_SETTINGS, ...migrateSettings(load<Partial<PilotSettings>>(K.settings, {}), load<number>(K.settingsVersion, 1)) },
     source: 'none' as SourceKind,
     status: 'idle' as const,
     error: null,
@@ -127,7 +139,10 @@ export function PilotProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  useEffect(() => save(K.settings, state.settings), [state.settings]);
+  useEffect(() => {
+    save(K.settings, state.settings);
+    save(K.settingsVersion, SETTINGS_VERSION);
+  }, [state.settings]);
   useEffect(() => {
     save(K.sim, state.sim);
     if (mouseRef.current) Object.assign(mouseRef.current.opts, state.sim);
@@ -211,7 +226,7 @@ export function PilotProvider({ children }: { children: ReactNode }) {
       const patch: Partial<PilotSettings> = {};
       if (Number.isFinite(res.rmsPx)) patch.gazeSigmaPx = Math.round(Math.min(160, Math.max(30, res.rmsPx)));
       // Fixation radius follows the measured jitter, so noisy setups still produce landings.
-      if (Number.isFinite(res.jitterPx)) patch.fixationDispersionPx = Math.round(Math.min(260, Math.max(70, res.jitterPx * 2.2)));
+      if (Number.isFinite(res.jitterPx)) patch.fixationDispersionPx = Math.round(Math.min(200, Math.max(70, res.jitterPx * 2.2)));
       if (res.blinkThreshold !== null) patch.blinkClosedThreshold = Math.round(res.blinkThreshold * 100) / 100;
       updateSettings(patch);
       dispatch({ type: 'status', status: 'running' });

@@ -18,13 +18,31 @@ export interface BlendshapeLike {
 // Eye-corner / eyelid landmark indices of the MediaPipe face mesh.
 const EYE_A = { outer: 33, inner: 133, upper: 159, lower: 145 }; // subject's right eye
 const EYE_B = { outer: 263, inner: 362, upper: 386, lower: 374 }; // subject's left eye
-const IRIS_1 = 468; // centre of one iris (468..472)
-const IRIS_2 = 473; // centre of the other iris (473..477)
+const IRIS_1 = 468; // one iris: centre 468, contour 469..472
+const IRIS_2 = 473; // other iris: centre 473, contour 474..477
+
+/** Iris centre as the mean of its centre and four contour points (less jitter than one point). */
+function irisCentre(lm: LM[], first: number): LM {
+  let x = 0,
+    y = 0;
+  for (let i = first; i < first + 5; i++) {
+    x += lm[i].x;
+    y += lm[i].y;
+  }
+  return { x: x / 5, y: y / 5 };
+}
+
+/** Eyelid opening relative to eye width: shrinks when looking down, grows looking up. */
+function lidAperture(lm: LM[], eye: typeof EYE_A): number {
+  const w = Math.hypot(lm[eye.inner].x - lm[eye.outer].x, lm[eye.inner].y - lm[eye.outer].y) || 1e-6;
+  return Math.hypot(lm[eye.upper].x - lm[eye.lower].x, lm[eye.upper].y - lm[eye.lower].y) / w;
+}
 
 export const FEATURE_NAMES = [
   'irisAx', 'irisAy', 'irisBx', 'irisBy',
   'lookAh', 'lookAv', 'lookBh', 'lookBv',
   'yaw', 'pitch', 'roll', 'headX', 'headY', 'headZ',
+  'lidA', 'lidB',
 ] as const;
 export const FEATURE_COUNT = FEATURE_NAMES.length;
 
@@ -75,8 +93,8 @@ export function extractFeatures(
 ): number[] {
   if (!landmarks || landmarks.length < 478) return [];
   const eyeACentre = { x: (landmarks[EYE_A.outer].x + landmarks[EYE_A.inner].x) / 2, y: (landmarks[EYE_A.outer].y + landmarks[EYE_A.inner].y) / 2 };
-  const i1 = landmarks[IRIS_1];
-  const i2 = landmarks[IRIS_2];
+  const i1 = irisCentre(landmarks, IRIS_1);
+  const i2 = irisCentre(landmarks, IRIS_2);
   // Assign irises to eyes by proximity rather than trusting index order.
   const d1 = Math.hypot(i1.x - eyeACentre.x, i1.y - eyeACentre.y);
   const d2 = Math.hypot(i2.x - eyeACentre.x, i2.y - eyeACentre.y);
@@ -92,7 +110,7 @@ export function extractFeatures(
   const lookBv = bs(blendshapes, 'eyeLookUpLeft') - bs(blendshapes, 'eyeLookDownLeft');
 
   const pose = poseFromMatrix(matrix);
-  return [ax, ay, bx, by, lookAh, lookAv, lookBh, lookBv, ...pose];
+  return [ax, ay, bx, by, lookAh, lookAv, lookBh, lookBv, ...pose, lidAperture(landmarks, EYE_A), lidAperture(landmarks, EYE_B)];
 }
 
 export function blinkScores(blendshapes: BlendshapeLike[] | undefined): { left: number; right: number } {

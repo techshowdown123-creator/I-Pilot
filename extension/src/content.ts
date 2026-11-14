@@ -116,7 +116,7 @@ async function calibrate(): Promise<void> {
     const res = await runCalibration(engine.overlay, frames, { blinkThreshold: engine.settings.blinkClosedThreshold });
     const settings = { ...(state?.settings ?? {}) };
     if (Number.isFinite(res.rmsPx)) settings.gazeSigmaPx = Math.round(Math.min(160, Math.max(30, res.rmsPx)));
-    if (Number.isFinite(res.jitterPx)) settings.fixationDispersionPx = Math.round(Math.min(260, Math.max(70, res.jitterPx * 2.2)));
+    if (Number.isFinite(res.jitterPx)) settings.fixationDispersionPx = Math.round(Math.min(200, Math.max(70, res.jitterPx * 2.2)));
     if (res.blinkThreshold !== null) settings.blinkClosedThreshold = Math.round(res.blinkThreshold * 100) / 100;
     // Saving triggers storage.onChanged → apply() in every tab, so all tabs share the calibration.
     await chrome.storage.local.set({ model: res.model.toJSON(), settings, calibration: { errorPx: res.errorPx, rmsPx: res.rmsPx, at: Date.now() } });

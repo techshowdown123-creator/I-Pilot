@@ -315,7 +315,12 @@ export function resolveTarget(
 
   if (current && !insideOverlay) {
     const prev = ranked.find((c) => c.key === current.key);
-    if (prev && best.key !== prev.key && best.score < prev.score * opts.hysteresis) best = prev;
+    // Gaze clearly inside a different element ("the element containing the
+    // point") switches immediately; otherwise hysteresis stops flip-flopping.
+    const inside = (r: Rect) => p.x >= r.left + 3 && p.x <= r.right - 3 && p.y >= r.top + 3 && p.y <= r.bottom - 3;
+    const containing = ranked.find((c) => c.kind !== 'grid' && inside(c.rect));
+    if (containing && prev && containing.key !== prev.key && !inside(prev.rect)) best = containing;
+    else if (prev && best.key !== prev.key && best.score < prev.score * opts.hysteresis) best = prev;
   }
   const others = ranked.filter((c) => c.key !== best.key);
   const runnerUp = others[0];

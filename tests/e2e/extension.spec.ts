@@ -43,7 +43,7 @@ test('extension injects the overlay and streams camera frames from the offscreen
   await expect(page.locator('ipilot-overlay')).toHaveCount(0);
 
   // Enable with a placeholder calibration so frames produce gaze samples.
-  const dims = 14;
+  const dims = 16;
   await sw.evaluate(async (d) => {
     const model = { version: 1, mean: new Array(d).fill(0), std: new Array(d).fill(1), wx: new Array(d + 4).fill(0), wy: new Array(d + 4).fill(0), lambda: 1, createdAt: Date.now() };
     await chrome.storage.local.set({ enabled: true, model, settings: {} });

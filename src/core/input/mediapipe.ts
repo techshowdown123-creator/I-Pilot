@@ -92,7 +92,7 @@ export class MediaPipeFrameSource implements FrameProvider {
     if (this.active) return;
     if (!window.isSecureContext) throw new Error('Camera access needs a secure context (HTTPS or localhost).');
     this.stream = await navigator.mediaDevices.getUserMedia({
-      video: { width: { ideal: this.opts.width ?? 640 }, height: { ideal: this.opts.height ?? 480 }, facingMode: 'user', frameRate: { ideal: 30 } },
+      video: { width: { ideal: this.opts.width ?? 1280 }, height: { ideal: this.opts.height ?? 720 }, facingMode: 'user', frameRate: { ideal: 30 } },
       audio: false,
     });
     this.video.srcObject = this.stream;

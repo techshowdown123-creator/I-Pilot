@@ -43,6 +43,10 @@ const OFFSCREEN_GRACE_MS = 400;
 const RESUME_MS = 400;
 /** …or unconditionally after this long. */
 const RESUME_MAX_MS = 1200;
+/** Window for the short-term gaze centre used to follow small eye movements. */
+const SHORT_WINDOW_MS = 250;
+/** The lids start to fall before the blink is detected; latch the target locked this long before. */
+const LATCH_LOOKBACK_MS = 150;
 const POST_BLINK_IGNORE_MS = 150;
 const ACTIVATION_COOLDOWN_MS = 450;
 
@@ -72,6 +76,11 @@ export class PilotEngine {
   private lastResolution: Resolution | null = null;
   private lockAt = 0;
   private lastResolveAt = 0;
+  private lastResolvePoint: Point | null = null;
+  /** Smoothed gaze over the last SHORT_WINDOW_MS, for following small movements. */
+  private shortBuf: (Point & { t: number })[] = [];
+  /** Recent lock changes, so a blink latches what was locked before the lids began to fall. */
+  private lockHistory: { t: number; c: Candidate | null; ambiguous: Resolution | null }[] = [];
   /** Set after any activation; dwell stays off until the eyes move (prevents repeat clicks). */
   private dwellBlocked = false;
   private blockPoint: Point | null = null;
@@ -189,6 +198,9 @@ export class PilotEngine {
     this.dwellBlocked = false;
     this.recent = [];
     this.clearSince = null;
+    this.shortBuf = [];
+    this.lastResolvePoint = null;
+    this.lockHistory = [];
   }
 
   // ------------------------------------------------------------------ samples
@@ -349,20 +361,34 @@ export class PilotEngine {
     // A fixation that found nothing (or whose target vanished) is re-resolved
     // periodically, so content that appears under a steady gaze becomes selectable.
     const reResolve = fe?.type === 'update' && !this.sm.target && t - this.lastResolveAt > 500;
-    if (fe && (fe.type === 'start' || reResolve)) {
+    // Small eye movements (e.g. to the next option in a list) can stay inside
+    // one I-DT fixation on a noisy webcam. Track the short-term centre of gaze
+    // and re-resolve when it has drifted, so the lock follows small steps.
+    this.shortBuf.push({ x: f.x, y: f.y, t });
+    while (this.shortBuf.length && t - this.shortBuf[0].t > SHORT_WINDOW_MS) this.shortBuf.shift();
+    const shortMean = meanPoint(this.shortBuf);
+    const driftLimit = Math.max(25, this.settings.gazeSigmaPx * 0.35);
+    const drifted =
+      fe?.type === 'update' &&
+      !!this.lastResolvePoint &&
+      t - this.lastResolveAt > 200 &&
+      Math.hypot(shortMean.x - this.lastResolvePoint.x, shortMean.y - this.lastResolvePoint.y) > driftLimit;
+    if (fe && (fe.type === 'start' || reResolve || drifted)) {
       this.lastResolveAt = t;
+      const point = fe.type === 'start' ? { x: fe.fixation.x, y: fe.fixation.y } : shortMean;
+      this.lastResolvePoint = point;
       // Stage 6: resolve the landing against the DOM.
       const exclusive = this.overlay.exclusive || this.userPaused;
       const res = resolveTarget(
         this.doc,
-        { x: fe.fixation.x, y: fe.fixation.y },
+        point,
         { sigma: this.settings.gazeSigmaPx, ambiguityRatio: this.settings.ambiguityRatio, hysteresis: this.settings.hysteresis, exclude: this.overlay.host },
         this.sm.target,
         this.overlay.targets(this.userPaused),
         exclusive,
       );
       this.stats.landings++;
-      this.lastLanding = { x: fe.fixation.x, y: fe.fixation.y };
+      this.lastLanding = point;
       const wasPaused = this.sm.state === 'PAUSED';
       const prevKey = this.sm.target?.key;
       if (this.userPaused) {
@@ -373,6 +399,7 @@ export class PilotEngine {
         this.sm.landing(res.best, t);
         if (this.sm.state !== 'PAUSED') {
           this.lastResolution = res;
+          this.recordLock(t, res.best, res.ambiguous ? res : null);
           this.overlay.setHighlight(res.best, {
             state: this.sm.state,
             alternatives: res.ambiguous ? res.ranked.slice(1, 3) : [],
@@ -407,10 +434,21 @@ export class PilotEngine {
   private onBlink(e: BlinkEvent): void {
     this.emit('blink', e);
     if (e.type === 'close') {
-      // Latch the target from the last stable fixation before the eyes closed.
-      const c = this.sm.target;
+      // Latch the target from the last stable fixation before the eyes closed:
+      // what was locked LATCH_LOOKBACK_MS ago, since falling lids drag the gaze
+      // estimate downwards just before a closure is detected.
+      let c = this.sm.target;
+      let ambiguous = this.lastResolution?.best?.key === c?.key && this.lastResolution?.ambiguous ? this.lastResolution : null;
+      if (this.settings.snapping && !this.userPaused) {
+        const before = [...this.lockHistory].reverse().find((h) => h.t <= e.t - LATCH_LOOKBACK_MS);
+        const allowed = !this.overlay.exclusive || before?.c?.kind === 'overlay';
+        if (before?.c?.el.isConnected && allowed) {
+          c = before.c;
+          ambiguous = before.ambiguous;
+        }
+      }
       const usable = c && (this.sm.canActivate || (this.userPaused && c.kind === 'overlay'));
-      this.latched = usable ? { c, ambiguous: this.lastResolution?.best?.key === c.key && this.lastResolution.ambiguous ? this.lastResolution : null, closedAt: e.t } : null;
+      this.latched = usable && c ? { c, ambiguous, closedAt: e.t } : null;
     } else if (e.type === 'deliberate') {
       this.stats.deliberateBlinks++;
       this.overlay.setProgress(null, null);
@@ -457,6 +495,13 @@ export class PilotEngine {
       return;
     }
     this.perform(c, method, t);
+  }
+
+  private recordLock(t: number, c: Candidate | null, ambiguous: Resolution | null): void {
+    const last = this.lockHistory[this.lockHistory.length - 1];
+    if (last && last.c?.key === c?.key && !!last.ambiguous === !!ambiguous) return;
+    this.lockHistory.push({ t, c, ambiguous });
+    while (this.lockHistory.length > 20) this.lockHistory.shift();
   }
 
   /**
@@ -559,6 +604,8 @@ export class PilotEngine {
     this.overlay.setHighlight(null, { state: this.sm.state });
     this.idt.reset();
     this.lockAt = 0;
+    this.lockHistory = [];
+    this.lastResolvePoint = null;
     this.refreshStatus();
   }
 
@@ -629,6 +676,16 @@ export class PilotEngine {
 function toRectOf(el: Element) {
   const r = el.getBoundingClientRect();
   return { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
+}
+
+function meanPoint(ps: Point[]): Point {
+  let x = 0,
+    y = 0;
+  for (const p of ps) {
+    x += p.x;
+    y += p.y;
+  }
+  return { x: x / ps.length, y: y / ps.length };
 }
 
 function medianPoint(ps: Point[]): Point {

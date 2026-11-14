@@ -112,6 +112,11 @@ export class GazeModel {
     return this.m.updatedAt ?? this.m.createdAt;
   }
 
+  /** Number of input features the model was fitted on. */
+  get dims(): number {
+    return this.m.mean.length;
+  }
+
   get learnedCount(): number {
     return this.m.adaptive?.X.length ?? 0;
   }
