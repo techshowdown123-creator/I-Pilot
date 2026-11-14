@@ -1,0 +1,43 @@
+﻿{
+  "name": "ipilot",
+  "version": "0.1.0",
+  "private": true,
+  "description": "I-Pilot: web-based eye-gaze interaction with semantic element snapping and blink-confirmed selection",
+  "type": "module",
+  "scripts": {
+    "assets": "node scripts/prepare-assets.mjs",
+    "dev": "npm run assets && vite",
+    "build": "npm run assets && tsc -p tsconfig.json --noEmit && vite build",
+    "preview": "vite preview",
+    "build:ext": "npm run assets && node scripts/build-extension.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "e2e": "playwright test",
+    "e2e:ext": "npm run build:ext && playwright test -c playwright.ext.config.ts",
+    "server": "node server/index.js"
+  },
+  "dependencies": {
+    "@mediapipe/tasks-vision": "1.2.3",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "react-router-dom": "6.30.6"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.65.1",
+    "@tailwindcss/vite": "4.3.5",
+    "@types/chrome": "0.3.7",
+    "@types/node": "24.19.2",
+    "@types/react": "18.3.31",
+    "@types/react-dom": "18.3.7",
+    "@vitejs/plugin-react": "6.3.0",
+    "cors": "2.8.6",
+    "esbuild": "0.28.2",
+    "express": "5.3.0",
+    "jsdom": "31.0.1",
+    "tailwindcss": "4.3.5",
+    "typescript": "5.9.3",
+    "vite": "8.3.8",
+    "vitest": "5.1.0"
+  }
+}

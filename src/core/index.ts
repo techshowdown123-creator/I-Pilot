@@ -1,0 +1,15 @@
+export * from './types';
+export * from './settings';
+export { OneEuroFilter, OneEuroFilter2D } from './filters/oneEuro';
+export { IDTDetector } from './fixation/idt';
+export { BlinkDetector } from './blink/blinkDetector';
+export { GazeModel, type GazeModelJSON } from './gaze/regression';
+export { extractFeatures, FEATURE_NAMES } from './gaze/features';
+export { runCalibration, isCancelled, type CalibrationResult } from './gaze/calibration';
+export { resolveTarget, collectCandidates, scoreCandidates } from './targets/resolver';
+export { PilotStateMachine } from './engine/stateMachine';
+export { PilotEngine, type ActivationEvent, type EngineEvents } from './engine/engine';
+export { Overlay } from './overlay/overlay';
+export { CameraGazeSource, MouseGazeSource, type GazeProvider, type FrameProvider } from './input/sources';
+export { screenMapper } from './input/screen';
+export { nowMs } from './time';
