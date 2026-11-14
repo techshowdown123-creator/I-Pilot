@@ -51,6 +51,49 @@ describe('GazeModel', () => {
     expect(m2.predict(feat(700, 700)).x).toBeCloseTo(m.predict(feat(700, 700)).x, 6);
   });
 
+  it('learning from confirmed selections corrects drift after the head moves', () => {
+    // Calibrated at one head position…
+    const feat = (sx: number, sy: number, shift = 0) => {
+      const h = (sx - 960) / 4000 + shift;
+      const v = (sy - 540) / 6000;
+      // A head shift moves the irises in the image *and* shows up in head position (headX).
+      return [h, v, h, v, h * 3, v * 3, h * 3, v * 3, 0, 0, 0, shift * 100, 0, -40];
+    };
+    const X: number[][] = [];
+    const Y: { x: number; y: number }[] = [];
+    for (const gx of [0.1, 0.5, 0.9])
+      for (const gy of [0.1, 0.5, 0.9])
+        for (let k = 0; k < 15; k++) {
+          X.push(feat(gx * 1920, gy * 1080).map((v) => v + (Math.random() - 0.5) * 1e-4));
+          Y.push({ x: gx * 1920, y: gy * 1080 });
+        }
+    const m = GazeModel.fit(X, Y, 0.5);
+    expect(m.canLearn).toBe(true);
+    // …then the iris features shift (head moved), so predictions drift sideways.
+    const shift = 0.03;
+    const err = () => {
+      let e = 0;
+      for (const [sx, sy] of [[400, 300], [1500, 800], [960, 540]]) {
+        const p = m.predict(feat(sx, sy, shift));
+        e += Math.hypot(p.x - sx, p.y - sy);
+      }
+      return e / 3;
+    };
+    const before = err();
+    expect(before).toBeGreaterThan(80);
+    // A handful of confirmed selections at known targets under the new pose.
+    for (const [sx, sy] of [[300, 200], [1600, 250], [900, 600], [400, 900], [1500, 950], [1000, 300]]) {
+      expect(m.learn([feat(sx, sy, shift), feat(sx, sy, shift)], { x: sx, y: sy })).toBe(true);
+    }
+    expect(err()).toBeLessThan(before / 2);
+    expect(m.learnedCount).toBe(12);
+    // Survives JSON storage, and can be reset.
+    const copy = GazeModel.fromJSON(JSON.parse(JSON.stringify(m.toJSON())));
+    expect(copy.learnedCount).toBe(12);
+    copy.resetLearning();
+    expect(copy.learnedCount).toBe(0);
+  });
+
   it('returns NaN for a feature vector of the wrong length', () => {
     const m = GazeModel.fit(
       Array.from({ length: 10 }, (_, i) => [i, i * 2, 1, 1]),

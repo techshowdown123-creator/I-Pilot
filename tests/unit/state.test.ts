@@ -54,6 +54,22 @@ describe('PilotStateMachine', () => {
     expect(sm.state).toBe('TRACKING');
   });
 
+  it('resume() lifts an automatic pause only once its condition has cleared, and never a user pause', () => {
+    const sm = new PilotStateMachine();
+    sm.landing(target('a'), 1);
+    sm.pause('off-screen', 2);
+    sm.resume(3);
+    expect(sm.state).toBe('PAUSED'); // still off-screen
+    sm.conditionCleared('off-screen');
+    sm.resume(4);
+    expect(sm.state).toBe('TRACKING');
+    expect(sm.target).toBeNull(); // must look at something again before selecting
+    sm.pause('user', 5);
+    sm.conditionCleared('user');
+    sm.resume(6);
+    expect(sm.state).toBe('PAUSED');
+  });
+
   it('emits transitions', () => {
     const sm = new PilotStateMachine();
     const seen: string[] = [];

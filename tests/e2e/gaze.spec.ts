@@ -111,6 +111,35 @@ test('looking away pauses (no events) and a new fixation resumes', async ({ page
   await expect(page.getByTestId('dense-last')).toHaveText('Pressed: Key 2 (×1)');
 });
 
+test('with very noisy webcam-like gaze, looking back after looking away still resumes', async ({ page }) => {
+  // σ = 90 px noise + drift: too noisy for a strict 90 px fixation most of the time.
+  await page.addInitScript(() => localStorage.setItem('ipilot.sim', JSON.stringify({ noisePx: 90, driftPx: 40 })));
+  await start(page, '/demo/dense');
+  await lookAt(page, 640, 400, 800);
+  for (let round = 0; round < 3; round++) {
+    await page.evaluate(() => document.dispatchEvent(new MouseEvent('mouseleave')));
+    await expect.poll(() => pilotState(page), { timeout: 3000 }).toBe('PAUSED');
+    await lookAt(page, 640 + round * 20, 400, 100);
+    await expect.poll(() => pilotState(page), { timeout: 2500 }).not.toBe('PAUSED');
+    await expect(overlay(page).locator('.status')).not.toContainText('Paused');
+  }
+});
+
+test('losing the face pauses, and it resumes once the face is back', async ({ page }) => {
+  await start(page, '/demo/dense');
+  await lookAtEl(page, page.getByRole('button', { name: '5', exact: true }));
+  const setFace = (lost: boolean) =>
+    page.evaluate((l) => ((window as unknown as { __ipilot: { getSource: () => { faceLost: boolean } } }).__ipilot.getSource().faceLost = l), lost);
+  await setFace(true);
+  await expect.poll(() => pilotState(page), { timeout: 3000 }).toBe('PAUSED');
+  await expect(overlay(page).locator('.status')).toContainText('face not detected');
+  await setFace(false);
+  await expect.poll(() => pilotState(page), { timeout: 2500 }).not.toBe('PAUSED');
+  await lookAtEl(page, page.getByRole('button', { name: '5', exact: true }), 3, 3);
+  await blink(page);
+  await expect(page.getByTestId('dense-last')).toHaveText('Pressed: Key 5 (×1)');
+});
+
 test('dangerous actions need confirmation', async ({ page }) => {
   await start(page, '/demo/shop');
   await page.getByRole('button', { name: 'Add to cart' }).first().click(); // set-up by mouse

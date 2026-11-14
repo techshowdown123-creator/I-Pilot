@@ -31,6 +31,8 @@ export interface PilotSettings {
   hysteresis: number;
 
   confirmDangerous: boolean;
+  /** Refine the gaze model from each confirmed selection (implicit recalibration). */
+  learnFromSelections: boolean;
   showGazeDot: boolean;
 
   // Geometry for converting px errors to degrees.
@@ -54,6 +56,7 @@ export const DEFAULT_SETTINGS: PilotSettings = {
   ambiguityRatio: 0.7,
   hysteresis: 1.4,
   confirmDangerous: true,
+  learnFromSelections: true,
   showGazeDot: false,
   viewingDistanceCm: 60,
   pxPerCm: 96 / 2.54,

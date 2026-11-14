@@ -57,6 +57,7 @@ let engine: PilotEngine | null = null;
 let frames: RemoteFrameSource | null = null;
 let camera: CameraGazeSource | null = null;
 let state: StoredState | null = null;
+let appliedSettings = '';
 
 function visible(): boolean {
   return document.visibilityState === 'visible';
@@ -76,15 +77,28 @@ async function apply(): Promise<void> {
     frames = null;
     return;
   }
+  const settingsJSON = JSON.stringify(state.settings);
   if (!engine) {
     engine = new PilotEngine(state.settings);
     frames = new RemoteFrameSource();
     camera = new CameraGazeSource(frames, null);
     engine.setSource(camera);
-  } else {
+    // Share what the model learns from selections with every tab (throttled).
+    let pending = 0;
+    camera.onModelChange((m) => {
+      clearTimeout(pending);
+      pending = window.setTimeout(() => void chrome.storage.local.set({ model: m.toJSON() }), 1500);
+    });
+  } else if (settingsJSON !== appliedSettings) {
     engine.updateSettings(state.settings);
   }
-  camera!.setModel(state.model ? GazeModel.fromJSON(state.model) : null);
+  appliedSettings = settingsJSON;
+  // Only swap the model if another tab (or a calibration) changed it, so a
+  // storage write doesn't reset what this tab is doing.
+  const current = camera!.getModel();
+  const incoming = state.model;
+  if (!incoming) camera!.setModel(null);
+  else if (!current || (incoming.updatedAt ?? incoming.createdAt) !== current.version) camera!.setModel(GazeModel.fromJSON(incoming));
   engine.refreshStatus();
   if (visible()) await camera!.start();
   else camera!.stop();
@@ -102,6 +116,7 @@ async function calibrate(): Promise<void> {
     const res = await runCalibration(engine.overlay, frames, { blinkThreshold: engine.settings.blinkClosedThreshold });
     const settings = { ...(state?.settings ?? {}) };
     if (Number.isFinite(res.rmsPx)) settings.gazeSigmaPx = Math.round(Math.min(160, Math.max(30, res.rmsPx)));
+    if (Number.isFinite(res.jitterPx)) settings.fixationDispersionPx = Math.round(Math.min(260, Math.max(70, res.jitterPx * 2.2)));
     if (res.blinkThreshold !== null) settings.blinkClosedThreshold = Math.round(res.blinkThreshold * 100) / 100;
     // Saving triggers storage.onChanged → apply() in every tab, so all tabs share the calibration.
     await chrome.storage.local.set({ model: res.model.toJSON(), settings, calibration: { errorPx: res.errorPx, rmsPx: res.rmsPx, at: Date.now() } });

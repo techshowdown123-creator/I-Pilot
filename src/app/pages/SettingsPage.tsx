@@ -51,6 +51,12 @@ export function SettingsPage() {
           onChange={(v) => p.updateSettings({ clickAction: v as PilotSettings['clickAction'] })}
         />
         <Toggle label="Confirm dangerous actions" help="Delete, pay, submit… ask before acting." value={s.confirmDangerous} onChange={(v) => p.updateSettings({ confirmDangerous: v })} />
+        <Toggle
+          label="Learn from selections"
+          help="Each confirmed selection refines the gaze model, correcting drift as you use it."
+          value={s.learnFromSelections}
+          onChange={(v) => p.updateSettings({ learnFromSelections: v })}
+        />
         <Toggle label="Show gaze dot" help="Draw the smoothed gaze estimate (debugging)." value={s.showGazeDot} onChange={(v) => p.updateSettings({ showGazeDot: v })} />
       </section>
 

@@ -140,6 +140,12 @@ export function PilotProvider({ children }: { children: ReactNode }) {
     if (!cameraRef.current) {
       const m = load<GazeModelJSON | null>(K.model, null);
       cameraRef.current = new CameraGazeSource(framesRef.current, m ? GazeModel.fromJSON(m) : null);
+      // Persist what the model learns from selections (throttled).
+      let pending = 0;
+      cameraRef.current.onModelChange((model) => {
+        clearTimeout(pending);
+        pending = window.setTimeout(() => save(K.model, model.toJSON()), 1500);
+      });
     }
     await cameraRef.current.start();
     return cameraRef.current;
@@ -204,6 +210,8 @@ export function PilotProvider({ children }: { children: ReactNode }) {
       dispatch({ type: 'calibration', info });
       const patch: Partial<PilotSettings> = {};
       if (Number.isFinite(res.rmsPx)) patch.gazeSigmaPx = Math.round(Math.min(160, Math.max(30, res.rmsPx)));
+      // Fixation radius follows the measured jitter, so noisy setups still produce landings.
+      if (Number.isFinite(res.jitterPx)) patch.fixationDispersionPx = Math.round(Math.min(260, Math.max(70, res.jitterPx * 2.2)));
       if (res.blinkThreshold !== null) patch.blinkClosedThreshold = Math.round(res.blinkThreshold * 100) / 100;
       updateSettings(patch);
       dispatch({ type: 'status', status: 'running' });

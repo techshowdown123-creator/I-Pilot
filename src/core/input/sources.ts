@@ -22,6 +22,12 @@ export interface GazeProvider {
   readonly running: boolean;
   /** Whether samples carry meaningful coordinates (camera: needs calibration). */
   readonly calibrated: boolean;
+  /**
+   * Optional implicit recalibration: the user just confirmed that between
+   * `from` and `to` they were looking at `target` (screen px). Returns true if
+   * the model learned from it.
+   */
+  learn?(target: { x: number; y: number }, from: number, to: number, opts: { closedThreshold: number; maxErrorPx: number }): boolean;
 }
 
 class Emitter<T> {
@@ -40,6 +46,31 @@ export class CameraGazeSource implements GazeProvider {
   readonly kind = 'camera' as const;
   private em = new Emitter<GazeSample>();
   private unsub: Unsub | null = null;
+  /** Recent frames (≈3 s) so a confirmed selection can be turned into training data. */
+  private history: FaceFrame[] = [];
+  private modelListeners = new Set<(m: GazeModel) => void>();
+
+  /** Called after the model learned from a selection (persist it here). */
+  onModelChange(fn: (m: GazeModel) => void): Unsub {
+    this.modelListeners.add(fn);
+    return () => this.modelListeners.delete(fn);
+  }
+
+  learn(target: { x: number; y: number }, from: number, to: number, opts: { closedThreshold: number; maxErrorPx: number }): boolean {
+    const m = this.model;
+    if (!m || !m.canLearn) return false;
+    const frames = this.history.filter((f) => f.t >= from && f.t <= to && f.faceDetected && f.features.length && (f.blinkLeft + f.blinkRight) / 2 < opts.closedThreshold);
+    if (frames.length < 3) return false;
+    // Reject if the model was far off: the selection was probably not where the user looked.
+    const preds = frames.map((f) => m.predict(f.features));
+    const mx = [...preds.map((p) => p.x)].sort((a, b) => a - b)[Math.floor(preds.length / 2)];
+    const my = [...preds.map((p) => p.y)].sort((a, b) => a - b)[Math.floor(preds.length / 2)];
+    if (Math.hypot(mx - target.x, my - target.y) > opts.maxErrorPx) return false;
+    const step = Math.max(1, Math.floor(frames.length / 8));
+    const ok = m.learn(frames.filter((_, i) => i % step === 0).map((f) => f.features), target);
+    if (ok) this.modelListeners.forEach((fn) => fn(m));
+    return ok;
+  }
 
   constructor(
     readonly frames: FrameProvider,
@@ -69,6 +100,8 @@ export class CameraGazeSource implements GazeProvider {
   async start(): Promise<void> {
     if (!this.unsub) {
       this.unsub = this.frames.subscribeFrames((f) => {
+        this.history.push(f);
+        while (this.history.length && f.t - this.history[0].t > 3000) this.history.shift();
         const blink = (f.blinkLeft + f.blinkRight) / 2;
         if (!f.faceDetected || !this.model) {
           this.em.emit({ t: f.t, x: NaN, y: NaN, faceDetected: f.faceDetected, blink });

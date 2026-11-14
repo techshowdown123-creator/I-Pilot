@@ -38,7 +38,11 @@ export interface EngineEvents {
 type Handler<K extends keyof EngineEvents> = (e: EngineEvents[K]) => void;
 
 const FACE_LOST_GRACE_MS = 300;
-const OFFSCREEN_GRACE_MS = 300;
+const OFFSCREEN_GRACE_MS = 400;
+/** On-screen time before an automatic pause lifts (with steady gaze)… */
+const RESUME_MS = 400;
+/** …or unconditionally after this long. */
+const RESUME_MAX_MS = 1200;
 const POST_BLINK_IGNORE_MS = 150;
 const ACTIVATION_COOLDOWN_MS = 450;
 
@@ -59,6 +63,10 @@ export class PilotEngine {
   private handlers: { [K in keyof EngineEvents]?: Set<Handler<K>> } = {};
 
   private faceMissingSince: number | null = null;
+  /** When the pause condition cleared (face back + gaze on screen). */
+  private clearSince: number | null = null;
+  /** Last few raw viewport samples, for robust on/off-screen decisions. */
+  private recent: (Point & { t: number })[] = [];
   private offscreenSince: number | null = null;
   private lastOpenAt = 0;
   private lastResolution: Resolution | null = null;
@@ -67,7 +75,7 @@ export class PilotEngine {
   /** Set after any activation; dwell stays off until the eyes move (prevents repeat clicks). */
   private dwellBlocked = false;
   private blockPoint: Point | null = null;
-  private latched: { c: Candidate; ambiguous: Resolution | null } | null = null;
+  private latched: { c: Candidate; ambiguous: Resolution | null; closedAt: number } | null = null;
   private lastActivation = 0;
   private rawFixStart: number | null = null;
   private rawCandidate: Candidate | null = null;
@@ -75,7 +83,7 @@ export class PilotEngine {
   private calibrating = false;
   private lastViewport: Point | null = null;
   private keyHandler = (e: KeyboardEvent) => this.onKey(e);
-  readonly stats = { deliberateBlinks: 0, naturalBlinks: 0, activations: 0, landings: 0, startedAt: nowMs() };
+  readonly stats = { deliberateBlinks: 0, naturalBlinks: 0, activations: 0, landings: 0, learned: 0, startedAt: nowMs() };
 
   constructor(settings: Partial<PilotSettings> = {}, private doc: Document = document) {
     this.settings = { ...DEFAULT_SETTINGS, ...settings };
@@ -179,6 +187,8 @@ export class PilotEngine {
     this.rawFixStart = null;
     this.rawCandidate = null;
     this.dwellBlocked = false;
+    this.recent = [];
+    this.clearSince = null;
   }
 
   // ------------------------------------------------------------------ samples
@@ -191,6 +201,7 @@ export class PilotEngine {
     // Face presence → PAUSED after a short grace period.
     if (!s.faceDetected) {
       this.faceMissingSince ??= t;
+      this.clearSince = null;
       if (this.blink.closed) this.blink.abort();
       if (t - this.faceMissingSince > FACE_LOST_GRACE_MS && this.sm.state !== 'PAUSED') {
         this.idt.reset();
@@ -200,12 +211,17 @@ export class PilotEngine {
       return;
     }
     this.faceMissingSince = null;
-    if (this.sm.pauseReason === 'face-lost') this.sm.conditionCleared('face-lost');
+    if (this.sm.pauseReason === 'face-lost' && !this.sm.resumeArmed) {
+      this.sm.conditionCleared('face-lost');
+      this.refreshStatus();
+    }
 
     // Blink detection runs on every frame with a face.
     const be = this.blink.push(s.blink, t);
     if (be) this.onBlink(be);
-    const eyesClosed = this.blink.closed || s.blink >= this.settings.blinkClosedThreshold * 0.85;
+    // Only the calibrated threshold counts as "closed": looking down lowers the
+    // lids and raises the blink score, and those frames still carry gaze.
+    const eyesClosed = this.blink.closed;
     if (eyesClosed) {
       this.lastOpenAt = t;
       if (this.settings.selection === 'blink' && this.latched) {
@@ -220,11 +236,17 @@ export class PilotEngine {
 
     if (!Number.isFinite(s.x) || !Number.isFinite(s.y)) return;
     const vp = screenMapper.toViewport({ x: s.x, y: s.y }, win);
-    const margin = Math.max(60, this.settings.gazeSigmaPx);
-    const onScreen = vp.x > -margin && vp.y > -margin && vp.x < win.innerWidth + margin && vp.y < win.innerHeight + margin;
+    // Decide on/off-screen from the median of recent raw samples, so single
+    // noisy webcam estimates near the edges neither pause nor resume.
+    this.recent.push({ ...vp, t });
+    while (this.recent.length > 7) this.recent.shift();
+    const med = medianPoint(this.recent);
+    const margin = Math.max(80, this.settings.gazeSigmaPx * 1.5);
+    const onScreen = med.x > -margin && med.y > -margin && med.x < win.innerWidth + margin && med.y < win.innerHeight + margin;
 
     if (!onScreen) {
       this.offscreenSince ??= t;
+      this.clearSince = null;
       if (t - this.offscreenSince > OFFSCREEN_GRACE_MS && this.sm.state !== 'PAUSED') {
         this.idt.reset();
         this.filter.reset();
@@ -235,7 +257,27 @@ export class PilotEngine {
       return;
     }
     this.offscreenSince = null;
-    if (this.sm.pauseReason === 'off-screen') this.sm.conditionCleared('off-screen');
+    if (this.sm.pauseReason === 'off-screen' && !this.sm.resumeArmed) {
+      this.sm.conditionCleared('off-screen');
+      this.refreshStatus();
+    }
+
+    // Automatic pause: once the face is back and the gaze has been on screen
+    // and roughly steady for a moment, resume. A strict I-DT fixation is not
+    // required (webcam noise can exceed the fixation radius), but after
+    // RESUME_MAX_MS on screen we resume regardless.
+    if (this.sm.state === 'PAUSED' && this.sm.resumeArmed && this.sm.pauseReason !== 'user') {
+      this.clearSince ??= t;
+      const span = this.recent.filter((r) => t - r.t <= RESUME_MS);
+      const steady = dispersionOf(span) <= this.settings.fixationDispersionPx * 2.5;
+      if ((t - this.clearSince >= RESUME_MS && steady) || t - this.clearSince >= RESUME_MAX_MS) {
+        this.clearSince = null;
+        this.idt.reset();
+        this.filter.reset();
+        this.sm.resume(t);
+        this.overlay.setHighlight(null, { state: this.sm.state });
+      }
+    }
 
     // Stage 4: smoothing.
     const clamped = { x: Math.min(Math.max(vp.x, 0), win.innerWidth), y: Math.min(Math.max(vp.y, 0), win.innerHeight) };
@@ -285,7 +327,7 @@ export class PilotEngine {
         this.overlay.setProgress(f, frac, 'dwell', frac >= 1);
         if (frac >= 1) {
           this.overlay.setProgress(null, null);
-          this.trigger(under, null, 'dwell', t);
+          this.trigger(under, null, 'dwell', t, [t - this.settings.dwellMs + 150, t]);
         }
       } else this.overlay.setProgress(null, null);
     }
@@ -355,7 +397,7 @@ export class PilotEngine {
       this.overlay.setProgress(centreOf(c), frac, 'dwell', frac >= 1);
       if (frac >= 1) {
         this.overlay.setProgress(null, null);
-        this.trigger(c, this.lastResolution?.best?.key === c.key && this.lastResolution.ambiguous ? this.lastResolution : null, 'dwell', t);
+        this.trigger(c, this.lastResolution?.best?.key === c.key && this.lastResolution.ambiguous ? this.lastResolution : null, 'dwell', t, [t - this.settings.dwellMs + 150, t]);
       }
     }
   }
@@ -368,7 +410,7 @@ export class PilotEngine {
       // Latch the target from the last stable fixation before the eyes closed.
       const c = this.sm.target;
       const usable = c && (this.sm.canActivate || (this.userPaused && c.kind === 'overlay'));
-      this.latched = usable ? { c, ambiguous: this.lastResolution?.best?.key === c.key && this.lastResolution.ambiguous ? this.lastResolution : null } : null;
+      this.latched = usable ? { c, ambiguous: this.lastResolution?.best?.key === c.key && this.lastResolution.ambiguous ? this.lastResolution : null, closedAt: e.t } : null;
     } else if (e.type === 'deliberate') {
       this.stats.deliberateBlinks++;
       this.overlay.setProgress(null, null);
@@ -376,7 +418,8 @@ export class PilotEngine {
       this.latched = null;
       if (this.settings.selection !== 'blink' || !l) return;
       if (this.sm.state === 'PAUSED' && !(this.userPaused && l.c.kind === 'overlay')) return;
-      this.trigger(l.c, l.ambiguous, 'blink', e.t);
+      // The fixation just before the lids started to close is where the user looked.
+      this.trigger(l.c, l.ambiguous, 'blink', e.t, [l.closedAt - 650, l.closedAt - 80]);
     } else if (e.type === 'natural' || e.type === 'rest') {
       if (e.type === 'natural') this.stats.naturalBlinks++;
       this.latched = null;
@@ -387,9 +430,10 @@ export class PilotEngine {
   // ------------------------------------------------------------------ actions
 
   /** A selection was triggered on candidate c (by blink or dwell at time t). */
-  private trigger(c: Candidate, ambiguous: Resolution | null, method: 'blink' | 'dwell', t: number): void {
+  private trigger(c: Candidate, ambiguous: Resolution | null, method: 'blink' | 'dwell', t: number, lookWindow?: [number, number]): void {
     if (nowMs() - this.lastActivation < ACTIVATION_COOLDOWN_MS) return;
     if (!c.el.isConnected) return;
+    if (lookWindow && !(ambiguous && ambiguous.ranked.length > 1)) this.learnFrom(c, lookWindow);
     this.lastActivation = nowMs();
     this.dwellBlocked = true;
     this.blockPoint = this.lastViewport;
@@ -413,6 +457,24 @@ export class PilotEngine {
       return;
     }
     this.perform(c, method, t);
+  }
+
+  /**
+   * Implicit recalibration: a confirmed, unambiguous selection tells us where
+   * the user was really looking, so the gaze model learns from it (WebGazer's
+   * idea of learning from interactions). Only compact targets are used.
+   */
+  private learnFrom(c: Candidate, [from, to]: [number, number]): void {
+    if (!this.settings.learnFromSelections || !this.source?.learn) return;
+    const r = c.kind === 'grid' || c.kind === 'overlay' || !c.el.isConnected ? c.rect : toRectOf(c.el);
+    if (r.right - r.left > 280 || r.bottom - r.top > 180) return;
+    const centre = { x: (r.left + r.right) / 2, y: (r.top + r.bottom) / 2 };
+    const screen = screenMapper.toScreen(centre, this.doc.defaultView!);
+    const ok = this.source.learn(screen, from, to, {
+      closedThreshold: this.settings.blinkClosedThreshold,
+      maxErrorPx: Math.max(220, 3 * this.settings.gazeSigmaPx),
+    });
+    if (ok) this.stats.learned++;
   }
 
   private perform(c: Candidate, method: 'blink' | 'dwell', t: number): void {
@@ -562,6 +624,26 @@ export class PilotEngine {
   get gazePoint(): Point | null {
     return this.lastViewport;
   }
+}
+
+function toRectOf(el: Element) {
+  const r = el.getBoundingClientRect();
+  return { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
+}
+
+function medianPoint(ps: Point[]): Point {
+  const mid = (a: number[]) => {
+    const s = [...a].sort((p, q) => p - q);
+    return s[Math.floor(s.length / 2)];
+  };
+  return { x: mid(ps.map((p) => p.x)), y: mid(ps.map((p) => p.y)) };
+}
+
+function dispersionOf(ps: Point[]): number {
+  if (ps.length < 2) return 0;
+  const xs = ps.map((p) => p.x);
+  const ys = ps.map((p) => p.y);
+  return Math.max(...xs) - Math.min(...xs) + (Math.max(...ys) - Math.min(...ys));
 }
 
 function centreOf(c: Candidate): Point {

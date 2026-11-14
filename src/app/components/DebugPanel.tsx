@@ -71,6 +71,7 @@ export function DebugPanel() {
             </div>
           </div>
           {stats && <Row k="Blinks (deliberate / natural)" v={`${stats.deliberateBlinks} / ${stats.naturalBlinks}`} />}
+          {stats && p.source === 'camera' && <Row k="Learned from selections" v={String(stats.learned)} />}
           {last && <Row k="Last action" v={`${last.kind} · ${last.label.slice(0, 18)} · ${last.latencyMs.toFixed(0)} ms`} />}
           {p.source === 'mouse' && <p className="leading-snug text-slate-400">Simulation: the mouse is your gaze. Hold <kbd className="rounded bg-slate-700 px-1">Shift</kbd> ≥ {s.blinkMinMs} ms and release to blink-select. Move the mouse out of the window to look away.</p>}
         </div>

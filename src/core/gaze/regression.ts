@@ -14,7 +14,18 @@ export interface GazeModelJSON {
   /** Validation error measured after calibration, px (mean Euclidean). */
   errorPx?: number;
   createdAt: number;
+  /** Bumped whenever the model is refitted (e.g. after learning from a selection). */
+  updatedAt?: number;
+  /** Calibration samples, kept so the model can be refitted with new data. */
+  train?: { X: number[][]; Y: { x: number; y: number }[] };
+  /** Samples learned from confirmed selections (most recent last). */
+  adaptive?: { X: number[][]; Y: { x: number; y: number }[] };
 }
+
+/** Maximum learned samples kept; older ones are dropped first. */
+export const MAX_ADAPTIVE = 240;
+/** Learned samples count this many times as much as calibration samples (they reflect the current pose). */
+const ADAPTIVE_WEIGHT = 2;
 
 /** Expand a standardised feature vector with bias and quadratic terms. */
 export function expand(z: number[]): number[] {
@@ -57,6 +68,12 @@ export class GazeModel {
   constructor(private m: GazeModelJSON) {}
 
   static fit(features: number[][], targets: { x: number; y: number }[], lambda = 1.0): GazeModel {
+    const m = new GazeModel(GazeModel.solve(features, targets, lambda));
+    m.m.train = { X: features.map((f) => [...f]), Y: targets.map((t) => ({ x: t.x, y: t.y })) };
+    return m;
+  }
+
+  private static solve(features: number[][], targets: { x: number; y: number }[], lambda: number): GazeModelJSON {
     if (features.length < 4) throw new Error('Not enough calibration samples');
     const d = features[0].length;
     const mean = new Array(d).fill(0);
@@ -71,7 +88,8 @@ export class GazeModel {
     const A = features.map((f) => expand(f.map((v, i) => (Number.isFinite(std[i]) ? (v - mean[i]) / std[i] : 0))));
     const wx = ridgeSolve(A, targets.map((t) => t.x), lambda);
     const wy = ridgeSolve(A, targets.map((t) => t.y), lambda);
-    return new GazeModel({ version: 1, mean, std: std.map((s) => (Number.isFinite(s) ? s : 0)), wx, wy, lambda, createdAt: Date.now() });
+    const now = Date.now();
+    return { version: 1, mean, std: std.map((s) => (Number.isFinite(s) ? s : 0)), wx, wy, lambda, createdAt: now, updatedAt: now };
   }
 
   static fromJSON(j: GazeModelJSON): GazeModel {
@@ -88,6 +106,54 @@ export class GazeModel {
 
   set errorPx(v: number | undefined) {
     this.m.errorPx = v;
+  }
+
+  get version(): number {
+    return this.m.updatedAt ?? this.m.createdAt;
+  }
+
+  get learnedCount(): number {
+    return this.m.adaptive?.X.length ?? 0;
+  }
+
+  /** Whether the calibration data is stored, so learning is possible. */
+  get canLearn(): boolean {
+    return !!this.m.train && this.m.train.X.length > 0;
+  }
+
+  /**
+   * Add samples whose true gaze target is known (a confirmed selection) and
+   * refit: calibration data plus recent learned samples, the latter weighted
+   * higher so the model follows head-pose drift. Returns false if not possible.
+   */
+  learn(features: number[][], target: { x: number; y: number }): boolean {
+    if (!this.canLearn || !features.length) return false;
+    const ad = (this.m.adaptive ??= { X: [], Y: [] });
+    for (const f of features) {
+      if (f.length !== this.m.mean.length) continue;
+      ad.X.push([...f]);
+      ad.Y.push({ x: target.x, y: target.y });
+    }
+    while (ad.X.length > MAX_ADAPTIVE) {
+      ad.X.shift();
+      ad.Y.shift();
+    }
+    const X = [...this.m.train!.X];
+    const Y = [...this.m.train!.Y];
+    for (let k = 0; k < ADAPTIVE_WEIGHT; k++) {
+      X.push(...ad.X);
+      Y.push(...ad.Y);
+    }
+    const next = GazeModel.solve(X, Y, this.m.lambda);
+    this.m = { ...next, createdAt: this.m.createdAt, errorPx: this.m.errorPx, train: this.m.train, adaptive: ad };
+    return true;
+  }
+
+  /** Forget learned samples and go back to the pure calibration fit. */
+  resetLearning(): void {
+    if (!this.canLearn) return;
+    const next = GazeModel.solve(this.m.train!.X, this.m.train!.Y, this.m.lambda);
+    this.m = { ...next, createdAt: this.m.createdAt, errorPx: this.m.errorPx, train: this.m.train, adaptive: { X: [], Y: [] } };
   }
 
   predict(f: number[]): { x: number; y: number } {

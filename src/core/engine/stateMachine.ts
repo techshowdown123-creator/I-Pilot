@@ -53,6 +53,15 @@ export class PilotStateMachine {
     this.go(this.target ? 'LOCKED' : 'TRACKING', 'user-resume', t);
   }
 
+  /** Lift an automatic pause (face back, gaze on screen and steady). The old target is dropped. */
+  resume(t: number): void {
+    if (this.state !== 'PAUSED' || this.pauseReason === 'user' || !this.resumeArmed) return;
+    this.pauseReason = null;
+    this.resumeArmed = false;
+    this.target = null;
+    this.go('TRACKING', 'resume', t);
+  }
+
   /** A new fixation landed and resolved to `best` (or nothing). */
   landing(best: Candidate | null, t: number): void {
     if (this.state === 'PAUSED') {
