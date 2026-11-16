@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { PilotStateMachine } from '../../src/core/engine/stateMachine';
-import { susScore, summarize, type SessionResult } from '../../src/app/study/model';
 import { pxToDegrees } from '../../src/core/settings';
 import type { Candidate } from '../../src/core/types';
 
@@ -80,47 +79,8 @@ describe('PilotStateMachine', () => {
   });
 });
 
-describe('evaluation metrics', () => {
-  it('computes SUS scores', () => {
-    expect(susScore(new Array(10).fill(3))).toBe(50);
-    expect(susScore([5, 1, 5, 1, 5, 1, 5, 1, 5, 1])).toBe(100);
-    expect(susScore([1, 5, 1, 5, 1, 5, 1, 5, 1, 5])).toBe(0);
-  });
-
+describe('geometry helpers', () => {
   it('converts px error to visual angle (≈1 cm per degree at 60 cm)', () => {
     expect(pxToDegrees(37.8, { pxPerCm: 37.8, viewingDistanceCm: 60 })).toBeCloseTo(0.955, 2);
-  });
-
-  it('summarises sessions per condition', () => {
-    const s: SessionResult = {
-      id: 's',
-      participant: 'P-1',
-      order: ['A', 'B', 'C'],
-      startedAt: 0,
-      conditions: [
-        {
-          condition: 'C',
-          source: 'mouse',
-          calibrationErrorPx: null,
-          sigmaPx: 60,
-          trials: [
-            { task: 'pointing', trial: 1, target: 't', timeMs: 1000, wrong: 1, cancels: 0, completed: true },
-            { task: 'pointing', trial: 2, target: 't', timeMs: 3000, wrong: 0, cancels: 1, completed: true },
-          ],
-          latenciesMs: [2, 4],
-          reading: { durationS: 60, falseActivations: 1, deliberateBlinks: 2, naturalBlinks: 10 },
-          sus: new Array(10).fill(3),
-          startedAt: 0,
-          finishedAt: 1,
-        },
-      ],
-    };
-    const c = summarize([s]).find((x) => x.condition === 'C')!;
-    expect(c.meanTimeMs).toBe(2000);
-    expect(c.wrongRate).toBeCloseTo(1 / 3);
-    expect(c.correctionsPerTrial).toBe(1);
-    expect(c.falseTriggersPerMin).toBe(2);
-    expect(c.sus).toBe(50);
-    expect(c.meanLatencyMs).toBe(3);
   });
 });

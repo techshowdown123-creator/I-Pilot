@@ -90,6 +90,8 @@ export class PilotEngine {
   private rawCandidate: Candidate | null = null;
   private lastLanding: Point | null = null;
   private calibrating = false;
+  /** Gaze-only mode (used by the game): samples and pausing keep working, nothing is selected. */
+  private passive = false;
   private lastViewport: Point | null = null;
   private keyHandler = (e: KeyboardEvent) => this.onKey(e);
   readonly stats = { deliberateBlinks: 0, naturalBlinks: 0, activations: 0, landings: 0, learned: 0, startedAt: nowMs() };
@@ -146,12 +148,29 @@ export class PilotEngine {
       this.overlay.setGaze(null);
       this.overlay.setProgress(null, null);
     }
-    this.overlay.setToolbarVisible(!!src && !this.calibrating);
+    this.overlay.setToolbarVisible(!!src && !this.calibrating && !this.passive);
     this.refreshStatus();
   }
 
   getSource(): GazeProvider | null {
     return this.source;
+  }
+
+  /**
+   * Gaze-only mode for the game: gaze samples, blinks and pause detection keep
+   * working, but nothing is snapped, highlighted or selected.
+   */
+  setPassive(on: boolean): void {
+    if (this.passive === on) return;
+    this.passive = on;
+    this.resetTracking();
+    this.sm.target = null;
+    if (this.sm.state === 'LOCKED') this.sm.dropTarget(nowMs());
+    this.overlay.setHighlight(null, { state: this.sm.state });
+    this.overlay.setGaze(null);
+    this.overlay.setProgress(null, null);
+    this.overlay.setToolbarVisible(!on && !!this.source && !this.calibrating);
+    this.refreshStatus();
   }
 
   /** Suspend processing (e.g. during calibration) without tearing down. */
@@ -161,7 +180,7 @@ export class PilotEngine {
     this.overlay.setHighlight(null, { state: this.sm.state });
     this.overlay.setGaze(null);
     this.overlay.setProgress(null, null);
-    this.overlay.setToolbarVisible(!on && !!this.source);
+    this.overlay.setToolbarVisible(!on && !!this.source && !this.passive);
     this.refreshStatus();
   }
 
@@ -296,6 +315,7 @@ export class PilotEngine {
     const f = this.filter.filter(clamped.x, clamped.y, t);
     this.lastViewport = f;
     this.emit('sample', { t, x: vp.x, y: vp.y, fx: f.x, fy: f.y, faceDetected: true, blink: s.blink, onScreen: true });
+    if (this.passive) return;
 
     // Stage 5: fixation detection.
     const fe = this.idt.push(f.x, f.y, t);
@@ -449,6 +469,9 @@ export class PilotEngine {
       }
       const usable = c && (this.sm.canActivate || (this.userPaused && c.kind === 'overlay'));
       this.latched = usable && c ? { c, ambiguous, closedAt: e.t } : null;
+    } else if (e.type === 'deliberate' && this.passive) {
+      this.stats.deliberateBlinks++;
+      this.latched = null;
     } else if (e.type === 'deliberate') {
       this.stats.deliberateBlinks++;
       this.overlay.setProgress(null, null);
@@ -662,6 +685,7 @@ export class PilotEngine {
       const txt = r === 'user' ? 'Paused — look at Resume to continue' : r === 'face-lost' ? 'Paused — face not detected' : r === 'off-screen' ? 'Paused — looking away' : 'Paused';
       return this.overlay.setStatus(this.sm.resumeArmed ? 'Resuming — look at something' : txt, 'paused');
     }
+    if (this.passive) return this.overlay.setStatus('Game mode · gaze only', 'ok');
     const how = this.settings.selection === 'blink' ? 'slow blink to select' : `dwell ${(this.settings.dwellMs / 1000).toFixed(1)} s to select`;
     if (st === 'LOCKED') return this.overlay.setStatus(`${this.settings.snapping ? 'Locked' : 'Cursor'} · ${how}`, 'locked');
     this.overlay.setStatus(this.settings.snapping ? 'Tracking' : 'Raw cursor', 'ok');

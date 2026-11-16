@@ -51,6 +51,12 @@ export class MediaPipeFrameSource implements FrameProvider {
     this.video.muted = true;
     this.video.playsInline = true;
     this.video.autoplay = true;
+    // Safety net: if anything pauses the video (e.g. it was put into a page and
+    // then removed, which browsers treat as a pause) while tracking should run,
+    // resume it — otherwise no new frames arrive and tracking silently stops.
+    this.video.addEventListener('pause', () => {
+      if (this.active && this.stream) void this.video.play().catch(() => {});
+    });
   }
 
   get running(): boolean {

@@ -25,6 +25,10 @@ export type SourceKind = 'none' | 'mouse' | 'camera';
 export interface CalibrationInfo {
   errorPx: number;
   rmsPx: number;
+  /** Error predicting calibration dots left out of the fit, px (missing on older calibrations). */
+  cvErrorPx?: number;
+  /** Whether the head-movement step's data was kept. */
+  headStepUsed?: boolean;
   blinkThreshold: number | null;
   at: number;
   samples: number;
@@ -99,9 +103,18 @@ const base = import.meta.env.BASE_URL;
 /** A calibration made with an older gaze feature set can't be used; forget it so the UI asks for a new one. */
 function dropIncompatibleCalibration(): void {
   const m = load<GazeModelJSON | null>(K.model, null);
-  if (m && m.mean.length !== FEATURE_COUNT) {
+  // Models saved by later versions (they carry a featureVersion or are 3D models) use different features.
+  const newer = !!m && ('featureVersion' in (m as object) || (m as { kind?: string }).kind !== undefined);
+  // Models fitted before the head-noise fix (no `fit: 2`) drift badly when the head moves: recalibrate.
+  const oldFit = !!m && m.fit !== 2;
+  if (m && (m.mean?.length !== FEATURE_COUNT || newer || oldFit)) {
     save(K.model, null);
     save(K.calib, null);
+  }
+  try {
+    localStorage.removeItem('ipilot.model3d');
+  } catch {
+    /* ignore */
   }
 }
 
@@ -220,7 +233,7 @@ export function PilotProvider({ children }: { children: ReactNode }) {
       const res = await runCalibration(engine.overlay, cam.frames, { blinkThreshold: settingsRef.current.blinkClosedThreshold });
       cam.setModel(res.model);
       save(K.model, res.model.toJSON());
-      const info: CalibrationInfo = { errorPx: res.errorPx, rmsPx: res.rmsPx, blinkThreshold: res.blinkThreshold, at: Date.now(), samples: res.samples };
+      const info: CalibrationInfo = { errorPx: res.errorPx, rmsPx: res.rmsPx, cvErrorPx: res.cvErrorPx, headStepUsed: res.headStepUsed, blinkThreshold: res.blinkThreshold, at: Date.now(), samples: res.samples };
       save(K.calib, info);
       dispatch({ type: 'calibration', info });
       const patch: Partial<PilotSettings> = {};

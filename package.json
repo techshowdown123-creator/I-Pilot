@@ -14,8 +14,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "e2e": "playwright test",
-    "e2e:ext": "npm run build:ext && playwright test -c playwright.ext.config.ts",
-    "server": "node server/index.js"
+    "e2e:ext": "npm run build:ext && playwright test -c playwright.ext.config.ts"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "1.2.3",
@@ -31,9 +30,7 @@
     "@types/react": "18.3.31",
     "@types/react-dom": "18.3.7",
     "@vitejs/plugin-react": "6.3.0",
-    "cors": "2.8.6",
     "esbuild": "0.28.2",
-    "express": "5.3.0",
     "jsdom": "31.0.1",
     "tailwindcss": "4.3.5",
     "typescript": "5.9.3",

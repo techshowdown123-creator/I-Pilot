@@ -73,6 +73,47 @@ export class CameraGazeSource implements GazeProvider {
     return ok;
   }
 
+  /**
+   * Explicit correction: at time `at` the user confirmed they were looking at
+   * `target` (screen px), by Enter, a mouse click or a slow blink. Uses the
+   * open-eye frames from the 0.6 s before that (ending 0.1 s before the last
+   * open frame, so a blink's falling lids are skipped). Returns how far off
+   * the estimate was, or null if there were too few usable frames.
+   */
+  correct(target: { x: number; y: number }, at: number, opts: { closedThreshold: number }): { missPx: number } | null {
+    const m = this.model;
+    if (!m || !this.calibrated) return null;
+    const open = this.history.filter((f) => f.t <= at && f.faceDetected && f.features.length && (f.blinkLeft + f.blinkRight) / 2 < opts.closedThreshold);
+    if (!open.length) return null;
+    const end = open[open.length - 1].t - 100;
+    const window = open.filter((f) => f.t <= end && f.t >= end - 600);
+    if (window.length < 3) return null;
+    const med = (xs: number[]) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
+    // Only the last steady look counts: if the eyes moved onto the button just
+    // before confirming, the frames from before the move are about somewhere
+    // else. Anchor on the newest frames and drop those far from them.
+    const all = window.map((f) => m.predict(f.features));
+    const tail = all.slice(-4);
+    const anchor = { x: med(tail.map((p) => p.x)), y: med(tail.map((p) => p.y)) };
+    const dist = all.map((p) => Math.hypot(p.x - anchor.x, p.y - anchor.y));
+    const limit = Math.max(120, 3 * med(dist.slice(-4)));
+    const frames = window.filter((_, i) => dist[i] <= limit);
+    if (frames.length < 3) return null;
+    const preds = frames.map((f) => m.predict(f.features));
+    const missPx = Math.hypot(med(preds.map((p) => p.x)) - target.x, med(preds.map((p) => p.y)) - target.y);
+    const step = Math.max(1, Math.floor(frames.length / 10));
+    if (!m.addCorrection(frames.filter((_, i) => i % step === 0).map((f) => f.features), target)) return null;
+    this.modelListeners.forEach((fn) => fn(m));
+    return { missPx };
+  }
+
+  /** Forget all explicit corrections. */
+  clearCorrections(): void {
+    if (!this.model) return;
+    this.model.clearCorrections();
+    this.modelListeners.forEach((fn) => fn(this.model!));
+  }
+
   constructor(
     readonly frames: FrameProvider,
     private model: GazeModel | null = null,

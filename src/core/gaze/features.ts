@@ -46,6 +46,22 @@ export const FEATURE_NAMES = [
 ] as const;
 export const FEATURE_COUNT = FEATURE_NAMES.length;
 
+/**
+ * Smallest spread each feature is assumed to have when the model scales it
+ * (0 = no floor). If the head barely moves while calibrating, head position
+ * varies only by camera noise; scaling by that tiny spread made the noise look
+ * like signal, and leaning in or out afterwards threw the gaze off. In
+ * simulation a 1 cm floor on head position cut the lean-in error by ~40%;
+ * floors on head rotation made turns worse (that weight is real compensation).
+ */
+export const FEATURE_STD_FLOOR: readonly number[] = [
+  0, 0, 0, 0, // iris in eye
+  0, 0, 0, 0, // blendshape look scores
+  0, 0, 0, // yaw, pitch, roll
+  1, 1, 1, // head position (cm)
+  0, 0, // lid aperture
+];
+
 /** Iris position inside the eye, in an eye-aligned frame normalised by eye width. */
 function irisInEye(lm: LM[], eye: typeof EYE_A, iris: LM): [number, number] {
   const o = lm[eye.outer];

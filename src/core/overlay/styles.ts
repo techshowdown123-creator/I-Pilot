@@ -86,6 +86,9 @@ export const OVERLAY_CSS = `
   box-shadow: 0 0 0 6px rgba(239,68,68,.25); transition: transform .5s ease-out, left .45s ease-in-out, top .45s ease-in-out; }
 .calib .target::after { content: ''; position: absolute; left: 50%; top: 50%; width: 8px; height: 8px; margin: -4px 0 0 -4px; border-radius: 50%; background: #fff; }
 .calib .target.collect { transform: scale(.45); background: #22c55e; box-shadow: 0 0 0 6px rgba(34,197,94,.25); }
+.calib .target.head { transform: none; width: 56px; height: 56px; margin: -28px 0 0 -28px; background: #22c55e; box-shadow: 0 0 0 8px rgba(34,197,94,.25); }
+.calib .target.head::after { display: none; }
+.calib .target .glyph { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font: 700 30px/1 system-ui, sans-serif; color: #fff; }
 .calib .bar { position: absolute; left: 50%; bottom: 40px; transform: translateX(-50%); width: 320px; height: 8px; border-radius: 4px; background: #1e293b; overflow: hidden; }
 .calib .bar > div { height: 100%; background: #22c55e; width: 0; transition: width .2s; }
 .calib .err { position: absolute; width: 12px; height: 12px; margin: -6px 0 0 -6px; border-radius: 50%; background: #facc15; }
