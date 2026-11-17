@@ -22,6 +22,8 @@ export interface FaceFrame {
   faceDetected: boolean;
   /** Gaze feature vector, see gaze/features.ts. Empty when no face. */
   features: number[];
+  /** Where the face is in the image and how it's turned (gaze/headPose.ts). */
+  pose?: import('./gaze/headPose').HeadPose;
   /** Eye-closure scores 0..1 from MediaPipe blendshapes. */
   blinkLeft: number;
   blinkRight: number;

@@ -3,6 +3,8 @@ import type { FrameProvider } from '../input/sources';
 import type { Overlay } from '../overlay/overlay';
 import { screenMapper } from '../input/screen';
 import { GazeModel } from './regression';
+import { medianPose, type HeadPose } from './headPose';
+import { nowMs } from '../time';
 
 export interface CalibrationResult {
   model: GazeModel;
@@ -14,6 +16,8 @@ export interface CalibrationResult {
   cvErrorPx: number;
   /** Whether the head-movement step's data was kept (it is dropped when it makes the check points worse). */
   headStepUsed: boolean;
+  /** Head position while calibrating (null if the camera gave none). */
+  headPose: HeadPose | null;
   /** Sample-to-sample spread of raw predictions while fixating, px — sets the fixation radius. */
   jitterPx: number;
   validation: { target: Point; predicted: Point; errorPx: number }[];
@@ -28,8 +32,30 @@ export interface CalibrationOptions {
   blinkStep?: boolean;
   /** Current closed-eye threshold (for filtering blink frames during collection). */
   blinkThreshold?: number;
+  /**
+   * Guided calibration: each dot waits until you confirm you're looking at it
+   * (Space / Enter, a click on the dot, or a slow blink), and the check phase
+   * shows where I-Pilot thinks you're looking and learns from every check dot.
+   */
+  guided?: boolean;
+  /** Include the head-movement step (default true). */
+  headStep?: boolean;
   win?: Window;
 }
+
+/** Check dots of guided calibration: the 5 check points plus top, left and right. */
+const GUIDED_CHECK: Point[] = [...VALIDATION_POINTS(), { x: 0.5, y: 0.15 }, { x: 0.12, y: 0.5 }, { x: 0.88, y: 0.5 }];
+function VALIDATION_POINTS(): Point[] {
+  return [
+    { x: 0.25, y: 0.35 },
+    { x: 0.75, y: 0.35 },
+    { x: 0.5, y: 0.62 },
+    { x: 0.2, y: 0.8 },
+    { x: 0.8, y: 0.8 },
+  ];
+}
+
+type Confirm = { at: number; how: 'key' | 'click' | 'blink' };
 
 class Cancelled extends Error {}
 
@@ -88,13 +114,7 @@ function gridPoints(n: number): Point[] {
   return [first, ...rest];
 }
 
-const VALIDATION: Point[] = [
-  { x: 0.25, y: 0.35 },
-  { x: 0.75, y: 0.35 },
-  { x: 0.5, y: 0.62 },
-  { x: 0.2, y: 0.8 },
-  { x: 0.8, y: 0.8 },
-];
+const VALIDATION: Point[] = VALIDATION_POINTS();
 
 /**
  * Interactive calibration (stage 3 set-up). Shows dots across the viewport,
@@ -121,16 +141,91 @@ export async function runCalibration(overlay: Overlay, frames: FrameProvider, op
   layer.appendChild(bar);
   const barFill = bar.firstElementChild as HTMLElement;
 
+  // Guided mode: a one-line hint at the very top (away from the dots) and the
+  // live "where I think you're looking" ring.
+  const hintEl = document.createElement('div');
+  hintEl.className = 'hint';
+  hintEl.style.display = 'none';
+  layer.appendChild(hintEl);
+  const ring = document.createElement('div');
+  ring.className = 'live';
+  ring.style.display = 'none';
+  layer.appendChild(ring);
+  const hint = (html: string | null) => {
+    hintEl.style.display = html ? '' : 'none';
+    if (html) hintEl.innerHTML = html;
+  };
+
   let latest: FaceFrame | null = null;
   let recorder: ((f: FaceFrame) => void) | null = null;
+  let onFrame: ((f: FaceFrame) => void) | null = null;
+  /** Recent frames (~3 s), to take the frames from just before a confirmation. */
+  const hist: FaceFrame[] = [];
+  // Confirmations (guided mode): Space / Enter, a click on the dot, or a slow blink.
+  let confirmWaiter: ((c: Confirm) => void) | null = null;
+  let closedSince: number | null = null;
+  let liveThr = opts.blinkThreshold ?? 0.45;
+  const fire = (c: Confirm) => {
+    const w = confirmWaiter;
+    confirmWaiter = null;
+    w?.(c);
+  };
   const unsub = frames.subscribeFrames((f) => {
     latest = f;
     recorder?.(f);
+    hist.push(f);
+    while (hist.length && f.t - hist[0].t > 3000) hist.shift();
+    if (confirmWaiter && f.faceDetected) {
+      const b = (f.blinkLeft + f.blinkRight) / 2;
+      if (b >= liveThr) closedSince ??= f.t;
+      else if (closedSince !== null) {
+        const d = f.t - closedSince;
+        const at = closedSince;
+        closedSince = null;
+        if (d >= 400 && d <= 2500) fire({ at, how: 'blink' });
+      }
+    }
+    onFrame?.(f);
   });
   const onKey = (e: KeyboardEvent) => {
     if (e.key === 'Escape') signal.cancelled = true;
+    else if (confirmWaiter && (e.key === ' ' || e.key === 'Enter')) {
+      e.preventDefault();
+      fire({ at: nowMs(), how: 'key' });
+    }
   };
   win.addEventListener('keydown', onKey, true);
+  layer.addEventListener('click', (e) => {
+    if (!confirmWaiter) return;
+    if (dot.style.display === 'none') return fire({ at: nowMs(), how: 'click' });
+    const r = dot.getBoundingClientRect();
+    // A click counts only on (or right next to) the dot: that's where the eyes are.
+    if (Math.hypot(e.clientX - (r.left + r.width / 2), e.clientY - (r.top + r.height / 2)) <= 80) fire({ at: nowMs(), how: 'click' });
+    else hint('Click <b>on the dot</b> (or press Space) while you look at it.');
+  });
+  const waitConfirm = () =>
+    new Promise<Confirm>((res, rej) => {
+      closedSince = null;
+      confirmWaiter = res;
+      const check = () => {
+        if (signal.cancelled) {
+          confirmWaiter = null;
+          rej(new Cancelled('cancelled'));
+        } else if (confirmWaiter === res) setTimeout(check, 50);
+      };
+      check();
+    });
+  /**
+   * The open-eye frames from just before a confirmation (`ms` long, ending
+   * shortly before the last open frame so a blink's falling lids are skipped),
+   * not earlier than `since` (the eyes need time to reach a new dot).
+   */
+  const lookFrames = (c: Confirm, since: number, ms: number): FaceFrame[] => {
+    const open = hist.filter((f) => f.t <= c.at && f.t >= since && f.faceDetected && f.features.length > 0 && (f.blinkLeft + f.blinkRight) / 2 < liveThr);
+    if (!open.length) return [];
+    const end = open[open.length - 1].t - (c.how === 'blink' ? 100 : 60);
+    return open.filter((f) => f.t <= end && f.t >= end - ms);
+  };
 
   const say = (html: string) => {
     msg.style.display = '';
@@ -207,14 +302,49 @@ export async function runCalibration(overlay: Overlay, frames: FrameProvider, op
     }
     msg.style.top = '';
     msg.style.display = 'none';
+    if (stepThreshold !== null) liveThr = stepThreshold;
 
     // 2. Calibration points (frames are kept whatever the lid position).
+    const guided = !!opts.guided;
+    const nCheck = guided ? GUIDED_CHECK.length : VALIDATION.length;
     const pts = gridPoints(opts.points ?? 13);
     const perPoint: { target: Point; frames: FaceFrame[] }[] = [];
-    for (const [i, p] of pts.entries()) {
-      const frames = await collectAt(p);
-      perPoint.push({ target: screenMapper.toScreen({ x: p.x * win.innerWidth, y: p.y * win.innerHeight }, win), frames });
-      barFill.style.width = ((i + 1) / (pts.length + VALIDATION.length + 1)) * 100 + '%';
+    if (guided) {
+      // Self-paced: each dot waits until you confirm you're looking at it; only
+      // the 0.8 s before that is used, so frames from while the eyes were
+      // still travelling to the dot (or had wandered) are left out.
+      dot.style.display = 'none';
+      say(
+        '<h2>Guided calibration</h2>Look at each dot. When your eyes are on it, press <b>Space</b>, <b>click the dot</b>, or <b>slow-blink</b>.<br>' +
+          'Go at your own pace.<br><small>Press Space (or slow-blink) to begin · Esc to cancel</small>',
+      );
+      await waitConfirm();
+      msg.style.display = 'none';
+      for (const [i, p] of pts.entries()) {
+        moveDot(p);
+        const shownAt = nowMs();
+        hint(`Dot ${i + 1} of ${pts.length}: look at it, then press <b>Space</b>, click it, or slow-blink`);
+        for (;;) {
+          const c = await waitConfirm();
+          const got = lookFrames(c, shownAt + 300, 800);
+          if (got.length >= 6) {
+            perPoint.push({ target: screenMapper.toScreen({ x: p.x * win.innerWidth, y: p.y * win.innerHeight }, win), frames: got });
+            dot.classList.add('collect');
+            beep(880, 70);
+            await sleep(250, signal);
+            break;
+          }
+          hint('Keep your eyes on the dot a moment longer, then confirm again');
+        }
+        barFill.style.width = ((i + 1) / (pts.length + nCheck + 1)) * 100 + '%';
+      }
+      hint(null);
+    } else {
+      for (const [i, p] of pts.entries()) {
+        const frames = await collectAt(p);
+        perPoint.push({ target: screenMapper.toScreen({ x: p.x * win.innerWidth, y: p.y * win.innerHeight }, win), frames });
+        barFill.style.width = ((i + 1) / (pts.length + nCheck + 1)) * 100 + '%';
+      }
     }
 
     // 3. Head movement: eyes stay on the centre dot while the head turns, nods
@@ -237,7 +367,7 @@ export async function runCalibration(overlay: Overlay, frames: FrameProvider, op
       { arrow: '↔', title: 'Turn your head left and right', how: 'Slowly and only a little, like saying “no”.' },
       { arrow: '⤢', title: 'Lean a little closer, then back', how: 'Slowly, about a hand’s width.' },
     ];
-    for (const [i, m] of moves.entries()) {
+    for (const [i, m] of (opts.headStep === false ? [] : moves).entries()) {
       dot.style.display = 'none';
       const text = (countdown: string) =>
         `<h2>Head movement ${i + 1} of ${moves.length}</h2>` +
@@ -267,7 +397,7 @@ export async function runCalibration(overlay: Overlay, frames: FrameProvider, op
       }
     }
     msg.style.display = 'none';
-    barFill.style.width = ((pts.length + 1) / (pts.length + VALIDATION.length + 1)) * 100 + '%';
+    barFill.style.width = ((pts.length + 1) / (pts.length + nCheck + 1)) * 100 + '%';
 
     // Looking at the bottom of the screen lowers the eyelids and raises the
     // blink score. Put the closed threshold above what open eyes produced
@@ -303,30 +433,111 @@ export async function runCalibration(overlay: Overlay, frames: FrameProvider, op
     const dotsOnly = GazeModel.fitCV(X, Y, G);
     const withHead = HX.length >= 20 ? GazeModel.fitCV([...X, ...HX], [...Y, ...HX.map(() => centreScreen)], [...G, ...HX.map(() => -1)]) : null;
 
-    // 4. Validation on unseen points: accuracy (median error) and precision (jitter).
-    const valSets: { target: Point; feats: number[][] }[] = [];
-    for (const [i, p] of VALIDATION.entries()) {
-      const feats = clean(await collectAt(p), thr);
-      barFill.style.width = ((pts.length + i + 2) / (pts.length + VALIDATION.length + 1)) * 100 + '%';
-      if (feats.length) valSets.push({ target: { x: p.x * win.innerWidth, y: p.y * win.innerHeight }, feats });
-    }
-    // Keep the head-movement model only if it predicts the check points about
-    // as well (head movement is then handled for free). If the eyes left the
-    // dot during the head step, its data is wrong and the check points show it.
-    const valError = (m: GazeModel) => validationError(m, valSets, (q) => screenMapper.toViewport(q, win));
-    const headUsed = !!withHead && valSets.length > 0 && valError(withHead.model) <= valError(dotsOnly.model) * 1.1 + 5;
-    const { model, cvErrorPx } = headUsed ? withHead! : dotsOnly;
-
+    let model: GazeModel;
+    let cvErrorPx: number;
+    let headUsed: boolean;
     const validation: CalibrationResult['validation'] = [];
     const jitters: number[] = [];
-    for (const { target, feats } of valSets) {
-      const preds = feats.map((f) => screenMapper.toViewport(model.predict(f), win));
-      const predicted = { x: median(preds.map((q) => q.x)), y: median(preds.map((q) => q.y)) };
-      validation.push({ target, predicted, errorPx: Math.hypot(predicted.x - target.x, predicted.y - target.y) });
-      if (preds.length > 3) {
-        const mx = preds.reduce((s, q) => s + q.x, 0) / preds.length;
-        const my = preds.reduce((s, q) => s + q.y, 0) / preds.length;
-        jitters.push(Math.sqrt(preds.reduce((s, q) => s + ((q.x - mx) ** 2 + (q.y - my) ** 2) / 2, 0) / preds.length));
+    /** Spread of predictions while fixating (precision), px. */
+    const spread = (preds: Point[]) => {
+      const mx = preds.reduce((s, q) => s + q.x, 0) / preds.length;
+      const my = preds.reduce((s, q) => s + q.y, 0) / preds.length;
+      return Math.sqrt(preds.reduce((s, q) => s + ((q.x - mx) ** 2 + (q.y - my) ** 2) / 2, 0) / preds.length);
+    };
+    let learnLine = '';
+
+    if (guided) {
+      // Dots only vs. + head movement, by how well each predicts calibration
+      // dots it wasn't fitted on (the check dots below are learned from).
+      headUsed = !!withHead && withHead.cvErrorPx <= dotsOnly.cvErrorPx * 1.1 + 5;
+      const TX = [...X, ...(headUsed ? HX : [])];
+      const TY = [...Y, ...(headUsed ? HX.map(() => centreScreen) : [])];
+      const TG = [...G, ...(headUsed ? HX.map(() => -1) : [])];
+      let fitted = headUsed ? withHead! : dotsOnly;
+
+      // 4. Check with live feedback: the ring shows where I-Pilot thinks you
+      //    look; at each check dot it notes how far off it was (before
+      //    learning, so the number is honest), then learns that spot.
+      const recentPred: Point[] = [];
+      ring.style.display = '';
+      ring.style.left = '-100px';
+      onFrame = (f) => {
+        if (!f.faceDetected || !f.features.length || blinkOf(f) >= thr) return;
+        recentPred.push(screenMapper.toViewport(fitted.model.predict(f.features), win));
+        while (recentPred.length > 6) recentPred.shift();
+        ring.style.left = median(recentPred.map((q) => q.x)) + 'px';
+        ring.style.top = median(recentPred.map((q) => q.y)) + 'px';
+      };
+      for (const [i, p] of GUIDED_CHECK.entries()) {
+        moveDot(p);
+        const target = { x: p.x * win.innerWidth, y: p.y * win.innerHeight };
+        const shownAt = nowMs();
+        hint(`Check ${i + 1} of ${GUIDED_CHECK.length}: the <b style="color:#facc15">yellow ring</b> is where I think you’re looking. Look at the dot and confirm, and I’ll learn from it`);
+        for (;;) {
+          const c = await waitConfirm();
+          let got = lookFrames(c, shownAt + 300, 600);
+          if (got.length >= 3) {
+            // Only the last steady look (the eyes may have just arrived).
+            const all = got.map((f) => fitted.model.predict(f.features));
+            const tail = all.slice(-4);
+            const anchor = { x: median(tail.map((q) => q.x)), y: median(tail.map((q) => q.y)) };
+            const dist = all.map((q) => Math.hypot(q.x - anchor.x, q.y - anchor.y));
+            const limit = Math.max(120, 3 * median(dist.slice(-4)));
+            got = got.filter((_, k) => dist[k] <= limit);
+          }
+          if (got.length >= 5) {
+            const preds = got.map((f) => screenMapper.toViewport(fitted.model.predict(f.features), win));
+            const predicted = { x: median(preds.map((q) => q.x)), y: median(preds.map((q) => q.y)) };
+            const miss = Math.hypot(predicted.x - target.x, predicted.y - target.y);
+            validation.push({ target, predicted, errorPx: miss });
+            if (preds.length > 3) jitters.push(spread(preds));
+            // Learn this spot: add it to the calibration data and refit.
+            const ts = screenMapper.toScreen(target, win);
+            for (const f of clean(got, thr)) {
+              TX.push(f);
+              TY.push(ts);
+              TG.push(100 + i);
+            }
+            fitted = GazeModel.fitCV(TX, TY, TG);
+            recentPred.length = 0;
+            dot.classList.add('collect');
+            beep(880, 70);
+            hint(`I was <b>${Math.round(miss)} px</b> off here → learned ✓`);
+            await sleep(900, signal);
+            break;
+          }
+          hint('Keep your eyes on the dot a moment longer, then confirm again');
+        }
+        barFill.style.width = ((pts.length + i + 2) / (pts.length + nCheck + 1)) * 100 + '%';
+      }
+      onFrame = null;
+      ring.style.display = 'none';
+      hint(null);
+      model = fitted.model;
+      cvErrorPx = fitted.cvErrorPx;
+      const half = Math.floor(validation.length / 2);
+      const avg = (vs: typeof validation) => vs.reduce((s, v) => s + v.errorPx, 0) / vs.length;
+      if (validation.length >= 4)
+        learnLine = `<br>First ${half} checks: <b>${Math.round(avg(validation.slice(0, half)))} px</b> → last ${validation.length - half}: <b>${Math.round(avg(validation.slice(half)))} px</b> (it learned as you went)`;
+    } else {
+      // 4. Validation on unseen points: accuracy (median error) and precision (jitter).
+      const valSets: { target: Point; feats: number[][] }[] = [];
+      for (const [i, p] of VALIDATION.entries()) {
+        const feats = clean(await collectAt(p), thr);
+        barFill.style.width = ((pts.length + i + 2) / (pts.length + VALIDATION.length + 1)) * 100 + '%';
+        if (feats.length) valSets.push({ target: { x: p.x * win.innerWidth, y: p.y * win.innerHeight }, feats });
+      }
+      // Keep the head-movement model only if it predicts the check points about
+      // as well (head movement is then handled for free). If the eyes left the
+      // dot during the head step, its data is wrong and the check points show it.
+      const valError = (m: GazeModel) => validationError(m, valSets, (q) => screenMapper.toViewport(q, win));
+      headUsed = !!withHead && valSets.length > 0 && valError(withHead.model) <= valError(dotsOnly.model) * 1.1 + 5;
+      ({ model, cvErrorPx } = headUsed ? withHead! : dotsOnly);
+      for (const { target, feats } of valSets) {
+        const preds = feats.map((f) => screenMapper.toViewport(model.predict(f), win));
+        const predicted = { x: median(preds.map((q) => q.x)), y: median(preds.map((q) => q.y)) };
+        validation.push({ target, predicted, errorPx: Math.hypot(predicted.x - target.x, predicted.y - target.y) });
+        if (preds.length > 3) jitters.push(spread(preds));
       }
     }
     const errorPx = validation.length ? validation.reduce((s, v) => s + v.errorPx, 0) / validation.length : NaN;
@@ -353,9 +564,13 @@ export async function runCalibration(overlay: Overlay, frames: FrameProvider, op
     }
     const cvLine = Number.isFinite(cvErrorPx) ? `<br>Calibration dots predicted without seeing them: <b>${Math.round(cvErrorPx)} px</b>` : '';
     const headLine = headUsed ? 'Head-movement step used.' : 'Head-movement step not used (it made the check points worse).';
-    say(`<h2>Calibration complete</h2>Average error <b>${Math.round(errorPx)} px</b> on ${validation.length} check points.${cvLine}<br><small>${headLine}<br>Red: where you looked · yellow: where I-Pilot thought you looked</small>`);
+    say(
+      `<h2>Calibration complete</h2>Average error <b>${Math.round(errorPx)} px</b> on ${validation.length} check points${guided ? ' (measured before it learned each one)' : ''}.${learnLine}${cvLine}<br><small>${headLine}<br>Red: where you looked · yellow: where I-Pilot thought you looked</small>`,
+    );
     await sleep(3200, signal);
-    return { model, errorPx, rmsPx, cvErrorPx, headStepUsed: headUsed, jitterPx, validation, blinkThreshold, samples: X.length };
+    // Where the head was while following the dots (head still): the spot the face guide points back to.
+    const headPose = medianPose(perPoint.flatMap((pp) => pp.frames.map((f) => f.pose).filter((q): q is HeadPose => !!q)));
+    return { model, errorPx, rmsPx, cvErrorPx, headStepUsed: headUsed, headPose, jitterPx, validation, blinkThreshold, samples: X.length };
   } finally {
     unsub();
     recorder = null;

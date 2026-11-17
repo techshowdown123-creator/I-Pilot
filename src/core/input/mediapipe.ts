@@ -1,6 +1,7 @@
 import { FaceLandmarker, FilesetResolver, type FaceLandmarkerResult } from '@mediapipe/tasks-vision';
 import type { FaceFrame } from '../types';
 import { blinkScores, extractFeatures } from '../gaze/features';
+import { poseFromLandmarks, type HeadPose } from '../gaze/headPose';
 import { nowMs } from '../time';
 import type { FrameProvider } from './sources';
 
@@ -45,6 +46,8 @@ export class MediaPipeFrameSource implements FrameProvider {
   private fpsCount = 0;
   private fpsT = 0;
   delegateInUse: 'GPU' | 'CPU' | null = null;
+  /** Head position on the latest frame (null: no face), for the face-position guide. */
+  lastPose: HeadPose | null = null;
 
   constructor(private opts: MediaPipeOptions) {
     this.video = document.createElement('video');
@@ -131,7 +134,9 @@ export class MediaPipeFrameSource implements FrameProvider {
     const t = nowMs();
     const res = this.landmarker!.detectForVideo(src, performance.now());
     this.lastResult = res;
-    this.emit(t, res);
+    const W = src instanceof HTMLVideoElement ? src.videoWidth : src.displayWidth;
+    const H = src instanceof HTMLVideoElement ? src.videoHeight : src.displayHeight;
+    this.emit(t, res, W, H);
     this.fpsCount++;
     if (t - this.fpsT > 1000) {
       this.fps = (this.fpsCount * 1000) / (t - this.fpsT);
@@ -169,16 +174,20 @@ export class MediaPipeFrameSource implements FrameProvider {
     this.schedule();
   }
 
-  private emit(t: number, res: FaceLandmarkerResult): void {
+  private emit(t: number, res: FaceLandmarkerResult, W: number, H: number): void {
     const lm = res.faceLandmarks?.[0];
     let frame: FaceFrame;
     if (!lm) {
+      this.lastPose = null;
       frame = { t, faceDetected: false, features: [], blinkLeft: 0, blinkRight: 0 };
     } else {
       const shapes = res.faceBlendshapes?.[0]?.categories;
       const matrix = res.facialTransformationMatrixes?.[0]?.data;
       const b = blinkScores(shapes);
-      frame = { t, faceDetected: true, features: extractFeatures(lm, shapes, matrix ? Array.from(matrix) : undefined), blinkLeft: b.left, blinkRight: b.right };
+      const features = extractFeatures(lm, shapes, matrix ? Array.from(matrix) : undefined);
+      const pose = poseFromLandmarks(lm, W, H, features) ?? undefined;
+      this.lastPose = pose ?? null;
+      frame = { t, faceDetected: true, features, pose, blinkLeft: b.left, blinkRight: b.right };
     }
     for (const f of this.fns) f(frame);
   }
