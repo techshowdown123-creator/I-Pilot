@@ -89,8 +89,30 @@ export const OVERLAY_CSS = `
 .calib .target.head { transform: none; width: 56px; height: 56px; margin: -28px 0 0 -28px; background: #22c55e; box-shadow: 0 0 0 8px rgba(34,197,94,.25); }
 .calib .target.head::after { display: none; }
 .calib .target .glyph { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font: 700 30px/1 system-ui, sans-serif; color: #fff; }
+.calib .hint { position: absolute; left: 50%; top: 10px; transform: translateX(-50%); max-width: 90%; font-size: 14px; line-height: 1.4; color: #cbd5e1; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.calib .live { position: absolute; width: 34px; height: 34px; margin: -17px 0 0 -17px; border-radius: 50%; border: 3px solid #facc15; box-shadow: 0 0 0 3px rgba(250,204,21,.25); pointer-events: none; transition: left .08s linear, top .08s linear; }
 .calib .bar { position: absolute; left: 50%; bottom: 40px; transform: translateX(-50%); width: 320px; height: 8px; border-radius: 4px; background: #1e293b; overflow: hidden; }
 .calib .bar > div { height: 100%; background: #22c55e; width: 0; transition: width .2s; }
+/* Phones: the toolbar becomes a compact row along the bottom (it would cover
+   a third of a narrow screen on the side), and text sizes shrink to fit. */
+@media (max-width: 640px) {
+  .toolbar { top: auto; bottom: 8px; right: 50%; transform: translateX(50%); flex-direction: row; gap: 8px; }
+  .tbtn { width: 64px; height: 56px; border-radius: 14px; font-size: 10px; gap: 2px; }
+  .tbtn svg { width: 22px; height: 22px; }
+  .status { right: 50%; transform: translateX(50%); bottom: 72px; font-size: 12px; padding: 6px 12px; white-space: nowrap; }
+  .toast { bottom: 110px; max-width: 90vw; }
+  .modal { padding: 16px 16px 80px; gap: 18px; }
+  .tiles { gap: 20px; }
+  .tile { min-width: 140px; min-height: 90px; font-size: 17px; }
+  .kbd { right: 0; bottom: 72px; padding: 8px; gap: 6px; }
+  .kbd .row { gap: 4px; }
+  .key { height: 52px; font-size: 18px; border-radius: 10px; }
+  .key.action, .key.done { font-size: 13px; }
+  .calib .msg { max-width: 90vw; width: 90vw; font-size: 15px; }
+  .calib .msg h2 { font-size: 21px; }
+  .calib .hint { white-space: normal; font-size: 13px; }
+  .calib .bar { width: 70vw; bottom: 24px; }
+}
 .calib .err { position: absolute; width: 12px; height: 12px; margin: -6px 0 0 -6px; border-radius: 50%; background: #facc15; }
 .calib .line { position: absolute; height: 2px; background: rgba(250,204,21,.7); transform-origin: 0 50%; }
 .calib .btn { pointer-events: auto; margin-top: 18px; padding: 12px 22px; border-radius: 12px; border: 0; background: #2563eb; color: #fff; font: 600 16px system-ui; cursor: pointer; }
