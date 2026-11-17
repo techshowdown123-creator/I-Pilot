@@ -299,7 +299,7 @@ export function GamePage() {
     <div className="mx-auto max-w-6xl">
       <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-3xl font-extrabold">Lantern Drift</h1>
+          <h1 className="text-2xl font-extrabold sm:text-3xl">Lantern Drift</h1>
           <p className="text-slate-500">Look higher to rise, lower to sink. Guide the lantern through the gaps.</p>
         </div>
         <div className="flex items-center gap-4 font-mono text-lg">
@@ -308,7 +308,7 @@ export function GamePage() {
         </div>
       </div>
 
-      <div ref={boxRef} className="relative h-[calc(100vh-230px)] min-h-[360px] overflow-hidden rounded-3xl bg-slate-900 ring-1 ring-slate-800" data-ipilot-ignore={phase === 'playing' || phase === 'countdown' ? '' : undefined}>
+      <div ref={boxRef} className="relative h-[calc(100dvh-330px)] min-h-[320px] overflow-hidden sm:h-[calc(100vh-230px)] sm:min-h-[360px] rounded-3xl bg-slate-900 ring-1 ring-slate-800" data-ipilot-ignore={phase === 'playing' || phase === 'countdown' ? '' : undefined}>
         <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" aria-label="Lantern Drift game" />
 
         {phase === 'countdown' && !paused && (
@@ -336,7 +336,7 @@ export function GamePage() {
 
         {(phase === 'menu' || phase === 'over') && (
           <div className="absolute inset-0 flex items-center justify-center bg-slate-950/50 p-6">
-            <div className="w-full max-w-lg rounded-3xl bg-white/95 p-8 text-center shadow-2xl">
+            <div className="w-full max-w-lg rounded-3xl bg-white/95 p-5 text-center sm:p-8 shadow-2xl">
               {phase === 'over' ? (
                 <>
                   <div className="text-sm font-bold uppercase tracking-wider text-amber-600">The lantern bumped a stalk</div>

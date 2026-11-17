@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { usePilot } from '../context/PilotContext';
 import { pxToDegrees } from '@core/settings';
+import { FaceGuide } from '../components/FaceGuide';
 
 /** Step 1: start the camera, see yourself, calibrate. Then on to the game. */
 export function CalibratePage() {
@@ -37,15 +38,14 @@ export function CalibratePage() {
     <div className="mx-auto grid max-w-5xl gap-6 lg:grid-cols-[1.1fr_1fr]">
       <section className="card">
         <p className="text-sm font-bold uppercase tracking-wider text-brand-600">Step 1</p>
-        <h1 className="mt-1 text-3xl font-extrabold tracking-tight">Calibrate your eyes</h1>
+        <h1 className="mt-1 text-2xl font-extrabold tracking-tight sm:text-3xl">Calibrate your eyes</h1>
         <p className="mt-2 text-slate-600">About a minute. Everything runs on this device; no video leaves your computer.</p>
 
         <ol className="mt-5 space-y-3">
           {[
             ['Blink check', 'Eyes open, then closed until you hear the beep.'],
             ['Follow the dot', 'Head still, follow the dot with your eyes only.'],
-            ['Move your head', 'One movement at a time (nod, turn, lean): read its instruction, then keep your eyes on the centre dot while you do it.'],
-          ].map(([t, d], i) => (
+            ['Move your head', 'One movement at a time (nod, turn, lean): read its instruction, then keep your eyes on the centre dot while you do it.'],          ].map(([t, d], i) => (
             <li key={t} className="flex gap-3">
               <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-brand-600 text-sm font-bold text-white">{i + 1}</span>
               <span>
@@ -58,18 +58,18 @@ export function CalibratePage() {
         {/* Webcam gaze is accurate to roughly 50–100 px, so the two actions are
             big and pushed to opposite ends of the row: a slightly-off estimate
             still lands clearly on one of them, not between them. */}
-        <div className="mt-6 flex flex-wrap items-center justify-between gap-6">
+        <div className="mt-6 flex flex-col items-stretch gap-6 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
           {!cameraOn ? (
-            <button className="btn-primary min-h-16 px-8 text-lg" onClick={() => p.startCamera()} disabled={busy} data-testid="start-camera">
+            <button className="btn-primary min-h-16 w-full px-8 text-lg sm:w-auto" onClick={() => p.startCamera()} disabled={busy} data-testid="start-camera">
               {p.status === 'starting' ? 'Starting camera…' : 'Start camera'}
             </button>
           ) : (
-            <button className="btn-primary min-h-16 px-8 text-lg" onClick={() => p.calibrate()} disabled={busy} data-testid="calibrate">
+            <button className="btn-primary min-h-16 w-full px-8 text-lg sm:w-auto" onClick={() => p.calibrate()} disabled={busy} data-testid="calibrate">
               {p.calibration ? 'Recalibrate' : 'Calibrate'}
             </button>
           )}
           {calibrated && (
-            <Link to="/game" className="btn-primary min-h-16 bg-emerald-600 px-8 text-lg hover:bg-emerald-700" data-testid="play">
+            <Link to="/game" className="btn-primary min-h-16 w-full bg-emerald-600 px-8 text-lg hover:bg-emerald-700 sm:w-auto" data-testid="play">
               Play Lantern Drift →
             </Link>
           )}
@@ -84,6 +84,16 @@ export function CalibratePage() {
             />
             Show where I-Pilot thinks I’m looking (a small dot)
           </label>
+        )}
+        {cameraOn && (
+          <button
+            className="btn-secondary mt-3 flex min-h-14 w-full justify-center text-lg"
+            onClick={() => p.calibrate({ guided: true })}
+            disabled={busy}
+            data-testid="calibrate-guided"
+          >
+            Guided calibration: go at your own pace and watch it learn
+          </button>
         )}
         {calibrated && (
           <Link to="/tune" className="btn-secondary mt-3 flex min-h-14 w-full justify-center text-lg" data-testid="tune">
@@ -119,11 +129,12 @@ export function CalibratePage() {
       </section>
 
       <section className="card flex flex-col gap-4">
-        <div className="aspect-video overflow-hidden rounded-2xl bg-slate-900" ref={previewRef} data-testid="camera-preview">
+        <div className="relative aspect-video overflow-hidden rounded-2xl bg-slate-900" ref={previewRef} data-testid="camera-preview">
           {!cameraOn && <div className="flex h-full items-center justify-center text-slate-400">Camera preview</div>}
+          {cameraOn && p.frames && <FaceGuide frames={p.frames} reference={p.calibration?.headPose} />}
         </div>
         <ul className="space-y-2 text-sm text-slate-600">
-          <li>• Sit about an arm’s length from the screen, face centred in the preview.</li>
+          <li>• Sit about an arm’s length from the screen with your face in the dashed outline. After calibrating, the outline marks where you sat: come back to it if accuracy drops.</li>
           <li>• Light your face from the front (a lamp or window behind the screen), not from behind.</li>
           <li>• Recalibrate if you move your seat or the laptop.</li>
         </ul>

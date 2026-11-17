@@ -18,6 +18,7 @@ import {
 } from '@core/index';
 import { MediaPipeFrameSource } from '@core/input/mediapipe';
 import { FEATURE_COUNT } from '@core/gaze/features';
+import type { HeadPose } from '@core/gaze/headPose';
 import { load, save } from '../lib/storage';
 
 export type SourceKind = 'none' | 'mouse' | 'camera';
@@ -29,6 +30,8 @@ export interface CalibrationInfo {
   cvErrorPx?: number;
   /** Whether the head-movement step's data was kept. */
   headStepUsed?: boolean;
+  /** Head position while calibrating: where the face guide points back to. */
+  headPose?: HeadPose | null;
   blinkThreshold: number | null;
   at: number;
   samples: number;
@@ -83,7 +86,8 @@ interface Ctx extends State {
   startCamera: () => Promise<void>;
   startSimulation: () => Promise<void>;
   stop: () => void;
-  calibrate: () => Promise<void>;
+  /** `guided`: self-paced dots and a live check that learns from each check dot. */
+  calibrate: (opts?: { guided?: boolean }) => Promise<void>;
   clearCalibration: () => void;
   updateSettings: (p: Partial<PilotSettings>) => void;
   setCondition: (c: Condition) => void;
@@ -220,7 +224,7 @@ export function PilotProvider({ children }: { children: ReactNode }) {
     [engine],
   );
 
-  const calibrate = useCallback(async () => {
+  const calibrate = useCallback(async (opts?: { guided?: boolean }) => {
     if (!engine) return;
     const prevSource = state.source;
     dispatch({ type: 'status', status: 'calibrating' });
@@ -230,10 +234,10 @@ export function PilotProvider({ children }: { children: ReactNode }) {
       engine.setSource(cam);
       dispatch({ type: 'source', source: 'camera' });
       engine.setCalibrating(true);
-      const res = await runCalibration(engine.overlay, cam.frames, { blinkThreshold: settingsRef.current.blinkClosedThreshold });
+      const res = await runCalibration(engine.overlay, cam.frames, { blinkThreshold: settingsRef.current.blinkClosedThreshold, guided: !!opts?.guided });
       cam.setModel(res.model);
       save(K.model, res.model.toJSON());
-      const info: CalibrationInfo = { errorPx: res.errorPx, rmsPx: res.rmsPx, cvErrorPx: res.cvErrorPx, headStepUsed: res.headStepUsed, blinkThreshold: res.blinkThreshold, at: Date.now(), samples: res.samples };
+      const info: CalibrationInfo = { errorPx: res.errorPx, rmsPx: res.rmsPx, cvErrorPx: res.cvErrorPx, headStepUsed: res.headStepUsed, headPose: res.headPose, blinkThreshold: res.blinkThreshold, at: Date.now(), samples: res.samples };
       save(K.calib, info);
       dispatch({ type: 'calibration', info });
       const patch: Partial<PilotSettings> = {};

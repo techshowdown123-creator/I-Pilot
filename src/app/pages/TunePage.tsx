@@ -5,9 +5,20 @@ import type { CameraGazeSource } from '@core/input/sources';
 import { screenMapper } from '@core/input/screen';
 import { nowMs } from '@core/time';
 
-const COLS = 4;
-const ROWS = 3;
 const LABELS = 'ABCDEFGHIJKL'.split('');
+
+/** True on phone-width screens (≤ 640 px), updated when the window is resized or rotated. */
+function useNarrow(): boolean {
+  const q = '(max-width: 640px)';
+  const [narrow, setNarrow] = useState(() => window.matchMedia(q).matches);
+  useEffect(() => {
+    const m = window.matchMedia(q);
+    const on = () => setNarrow(m.matches);
+    m.addEventListener('change', on);
+    return () => m.removeEventListener('change', on);
+  }, []);
+  return narrow;
+}
 
 /**
  * Fine-tuning by correction. Look at any button: the blue highlight is
@@ -19,6 +30,10 @@ const LABELS = 'ABCDEFGHIJKL'.split('');
  */
 export function TunePage() {
   const p = usePilot();
+  // 4 × 3 buttons on wider screens, 3 × 4 on phones (4 columns don't fit).
+  const narrow = useNarrow();
+  const COLS = narrow ? 3 : 4;
+  const ROWS = narrow ? 4 : 3;
   const refs = useRef<(HTMLButtonElement | null)[]>([]);
   const [cam, setCam] = useState<CameraGazeSource | null>(null);
   const [pick, setPick] = useState<number | null>(null);
@@ -94,7 +109,7 @@ export function TunePage() {
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [cam, confirm, guessIndex]);
+  }, [cam, confirm, guessIndex, COLS, ROWS]);
 
   const recent = misses.slice(-5);
   const avg = recent.length ? recent.reduce((a, v) => a + v, 0) / recent.length : null;
@@ -121,8 +136,8 @@ export function TunePage() {
             <b>Wrong?</b> Keep looking at your button and press the <kbd>arrow keys</kbd> to move my guess onto it (<span className="font-semibold text-amber-600">orange</span>), then <kbd>Enter</kbd>, or just click it.
           </p>
         </div>
-        <div className="flex items-center gap-4">
-          <div className="text-right text-sm" data-testid="tune-stats">
+        <div className="flex w-full flex-wrap items-center gap-3 sm:w-auto sm:gap-4">
+          <div className="w-full text-sm sm:w-auto sm:text-right" data-testid="tune-stats">
             <div>
               Corrections learned: <b data-testid="tune-count">{count}</b>
             </div>
@@ -144,7 +159,11 @@ export function TunePage() {
           </Link>
         </div>
       </div>
-      <div className="grid h-[calc(100vh-330px)] min-h-[360px] grid-cols-4 grid-rows-3 place-items-center rounded-3xl bg-slate-100 ring-1 ring-slate-200">
+      <div
+        className={`grid h-[480px] place-items-center rounded-3xl bg-slate-100 ring-1 ring-slate-200 sm:h-[calc(100vh-330px)] sm:min-h-[360px] ${
+          narrow ? 'grid-cols-3 grid-rows-4' : 'grid-cols-4 grid-rows-3'
+        }`}
+      >
         {LABELS.slice(0, COLS * ROWS).map((label, i) => (
           <button
             key={label}
@@ -154,7 +173,7 @@ export function TunePage() {
               (e.currentTarget as HTMLElement).blur();
               confirm(i);
             }}
-            className={`relative h-28 w-44 rounded-2xl bg-white text-4xl font-extrabold text-slate-800 shadow-sm ring-1 ring-slate-300 transition ${
+            className={`relative h-20 w-24 rounded-2xl bg-white text-3xl font-extrabold sm:h-28 sm:w-44 sm:text-4xl text-slate-800 shadow-sm ring-1 ring-slate-300 transition ${
               pick === i ? 'outline outline-[6px] outline-offset-4 outline-amber-400' : ''
             }`}
           >
