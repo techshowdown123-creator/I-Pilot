@@ -2,6 +2,9 @@
 
 A web-based eye-gaze interaction system with **semantic element snapping** and **blink-confirmed selection**. An ordinary webcam estimates where you are looking, the page's DOM is read to find the interactive element you most likely mean, and a deliberate slow blink activates it. All video is processed on the device: no frames are stored or uploaded, and the MediaPipe model and WASM are self-hosted.
 
+- **Live demo:** https://ipilot-kappa.vercel.app/
+- **Project report:** [report/IPilot_Project_Report.pdf](report/IPilot_Project_Report.pdf)
+
 It ships in two forms:
 
 - **Website** (React 18 + TypeScript + Vite + Tailwind) with two steps: **1 · Calibrate** (camera preview, blink check, dots) and **2 · Play**, the eye-controlled game *Lantern Drift*.
